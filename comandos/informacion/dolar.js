@@ -34,19 +34,30 @@ module.exports = {
       // Función para obtener datos de Binance
       const obtenerBinance = async () => {
         try {
-          const [usdtVes, eurVes, btcUsd] = await Promise.all([
-            axios.get('https://api.binance.com/api/v3/ticker/price?symbol=USDTVES'),
-            axios.get('https://api.binance.com/api/v3/ticker/price?symbol=EURVES'),
-            axios.get('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT')
-          ]);
+          // Solo obtener Bitcoin en USD desde Binance (símbolo correcto)
+          const btcResponse = await axios.get('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT');
           
           return {
-            usdt: parseFloat(usdtVes.data.price),
-            eur: parseFloat(eurVes.data.price),
-            btc: parseFloat(btcUsd.data.price)
+            btc: parseFloat(btcResponse.data.price)
           };
         } catch (error) {
           console.log(`Error con Binance: ${error.message}`);
+          return null;
+        }
+      };
+
+      // Función para obtener datos de AirTM (alternativa para USDT/VES)
+      const obtenerAirTM = async () => {
+        try {
+          // AirTM es una plataforma popular en Venezuela para USDT
+          const response = await axios.get('https://rates.airtm.com/api/v1/rates');
+          const usdtRate = response.data.rates?.USDT_VES || response.data.rates?.USD_VES;
+          
+          return {
+            usdt_airtm: usdtRate ? parseFloat(usdtRate) : null
+          };
+        } catch (error) {
+          console.log(`Error con AirTM: ${error.message}`);
           return null;
         }
       };
@@ -69,9 +80,10 @@ module.exports = {
       };
 
       // Obtener datos de todas las fuentes
-      const [dolarApiData, binanceData, exchangeData] = await Promise.all([
+      const [dolarApiData, binanceData, airtmData, exchangeData] = await Promise.all([
         obtenerDolarApi(),
         obtenerBinance(),
+        obtenerAirTM(),
         obtenerExchangeRate()
       ]);
 
@@ -81,15 +93,17 @@ module.exports = {
           let emoji = '💵';
           let nombre = dolar.nombre || 'Dólar';
           
+          // Filtrar Bitcoin VES - no lo queremos en bolívares
+          if (nombre.toLowerCase().includes('bitcoin')) {
+            continue; // Saltar el Bitcoin en bolívares
+          }
+          
           if (nombre.toLowerCase().includes('oficial')) {
             emoji = '🏛️';
             nombre = 'BCV (Oficial)';
           } else if (nombre.toLowerCase().includes('paralelo')) {
             emoji = '📈';
             nombre = 'Paralelo (USDT/VES)';
-          } else if (nombre.toLowerCase().includes('bitcoin')) {
-            emoji = '₿';
-            nombre = 'Bitcoin VES';
           }
           
           embed.fields.push({
@@ -111,24 +125,16 @@ module.exports = {
                  `Precio actual BTC/USDT`,
           inline: true
         });
+      }
 
-        // USDT/VES (Binance)
+      // Agregar datos de AirTM
+      if (airtmData && airtmData.usdt_airtm) {
         embed.fields.push({
-          name: '🔶 Binance USDT/VES',
-          value: `**Bs. ${binanceData.usdt.toLocaleString('es-VE', {minimumFractionDigits: 2})}**\n` +
-                 `Precio directo Binance`,
+          name: '🔶 AirTM USDT/VES',
+          value: `**Bs. ${airtmData.usdt_airtm.toLocaleString('es-VE', {minimumFractionDigits: 2})}**\n` +
+                 `Precio directo AirTM`,
           inline: true
         });
-
-        // EUR/VES si está disponible
-        if (binanceData.eur) {
-          embed.fields.push({
-            name: '🇪🇺 Euro Binance',
-            value: `**Bs. ${binanceData.eur.toLocaleString('es-VE', {minimumFractionDigits: 2})}**\n` +
-                   `EUR/VES directo`,
-            inline: true
-          });
-        }
       }
 
       // Agregar datos de referencia internacional
@@ -151,7 +157,7 @@ module.exports = {
                            `• **Paralelo** = Precio USDT/VES en mercado libre\n` +
                            `• **BCV** = Banco Central de Venezuela (oficial)\n` +
                            `• **Bitcoin** = Precio en USD (no bolívares)\n` +
-                           `• **Binance** = Precios directos del exchange`;
+                           `• **AirTM** = Precios directos del exchange`;
       }
 
       console.log(`Datos obtenidos exitosamente, enviando respuesta`);
