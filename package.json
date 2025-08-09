@@ -4,6 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -18,6 +20,7 @@
     "dotenv": "^16.5.0",
     "figlet": "^1.8.1",
     "node-fetch": "^3.3.2",
+    "nodemon": "^3.1.10",
     "openai": "^4.97.0",
     "pixiv-api-client": "^0.27.0",
     "pixiv-app-api": "^1.2.1",

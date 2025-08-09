@@ -38,7 +38,25 @@ client.on("messageCreate", async (message) => {
         "`!sortear` - Realiza un sorteo con los nombres agregados\n" +
         "`!reiniciar` - Borra todos los nombres guardados\n" +
         "`!lista` - Muestra los nombres actualmente agregados\n" +
-        "`!comandos` - Muestra esta lista de comandos"
+        "`!comandos` - Muestra esta lista de comandos\n" +
+        "`!avisar` - Manda una advertencia a un usuario\n" +
+        "`!rol_random` - Asigna un rol aleatorio al usuario\n" +
+        "`!gif` - Busca un GIF en Giphy\n" +
+        "`!cumpleaños` - Muestra la lista de cumpleaños registrados\n" +
+        "`!cumpleaños agregar dd/mm` - Registra tu cumpleaños\n" +
+        "`!cumpleaños lista` - Muestra la lista de cumpleaños registrados\n" +
+        "`!cumpleaños eliminar` - Elimina tu cumpleaños\n" +
+        "`!8ball` - Pregunta al 8ball\n" +
+        "`!encuesta` - Crea una encuesta\n" +
+        "`!ascii` - Convierte un texto en arte ASCII\n" +
+        "`!actividad` - Muestra los usuarios más activos\n" +
+        "`!stats` - Muestra estadísticas del servidor\n" +
+        "`!wiki` - Busca un tema en Wikipedia\n" +
+        "`!rps` - Juego de piedra, papel o tijeras\n" +
+        "`!memes` - Muestra un meme aleatorio\n" +
+        "`!chistes` - Muestra un chiste aleatorio\n" +
+        "`!nsfw [categoría]` - Muestra imágenes NSFW (solo canales NSFW)\n" +
+        "`!sfw [categoría]` - Muestra imágenes SFW (solo canales SFW)"
     );
   }
 

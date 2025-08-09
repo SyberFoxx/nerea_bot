@@ -1,0 +1,6 @@
+{
+  "watch": ["*.js", "comandos/**/*.js"],
+  "ignore": ["node_modules", "*.log", "*.txt", ".env"],
+  "ext": "js",
+  "delay": "1000"
+}
