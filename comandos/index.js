@@ -56,7 +56,8 @@ client.on("messageCreate", async (message) => {
         "`!memes` - Muestra un meme aleatorio\n" +
         "`!chistes` - Muestra un chiste aleatorio\n" +
         "`!nsfw [categoría]` - Muestra imágenes NSFW (solo canales NSFW)\n" +
-        "`!sfw [categoría]` - Muestra imágenes SFW (solo canales SFW)"
+        "`!sfw [categoría]` - Muestra imágenes SFW (solo canales SFW)\n" +
+        "`!dolar` - Consulta precios USD/EUR en Venezuela (BCV, Paralelo, Binance)"
     );
   }
 
