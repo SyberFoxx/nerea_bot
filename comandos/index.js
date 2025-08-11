@@ -57,7 +57,12 @@ client.on("messageCreate", async (message) => {
         "`!chistes` - Muestra un chiste aleatorio\n" +
         "`!nsfw [categoría]` - Muestra imágenes NSFW (solo canales NSFW)\n" +
         "`!sfw [categoría]` - Muestra imágenes SFW (solo canales SFW)\n" +
-        "`!dolar` - Consulta precios USD/EUR en Venezuela (BCV, Paralelo, Binance)"
+        "`!dolar` - Consulta precios USD/EUR en Venezuela (BCV, Paralelo, Binance)" +
+        "`!osrs precio` - Consulta precios de OSRS" +
+        "`!osrs alquimia` - Calcula la ganancia con High Alchemy" +
+        "`!radio <estación>` - Reproduce radios online 24/7" +
+        "`!radio list` - Ver estaciones disponibles" +
+        "`!radio stop` - Detener radio"
     );
   }
 

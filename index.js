@@ -7,12 +7,22 @@ const {
   registrarActividad,
 } = require("./comandos/estadisticasServidor/_actividadTracking");
 
+// Configurar FFmpeg estático
+try {
+  const ffmpeg = require('ffmpeg-static');
+  process.env.FFMPEG_PATH = ffmpeg;
+  console.log('FFmpeg configurado correctamente');
+} catch (error) {
+  console.log('ffmpeg-static no encontrado, usando FFmpeg del sistema');
+}
+
 // 2. Crea el cliente de Discord
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildVoiceStates,
   ],
 });
 
@@ -35,8 +45,24 @@ const juegosPath = path.join(comandosPath, "juegos");
 if (fs.existsSync(juegosPath)) {
   const archivosJuegos = fs.readdirSync(juegosPath);
   for (const archivo of archivosJuegos) {
-    const comando = require(path.join(juegosPath, archivo));
-    comandos.set(comando.nombre, comando.ejecutar);
+    try {
+      if (!archivo.endsWith('.js')) continue;
+      console.log(`Cargando comando de juegos: ${archivo}`);
+      const comando = require(path.join(juegosPath, archivo));
+      if (comando && comando.nombre && comando.ejecutar) {
+        comandos.set(comando.nombre, comando.ejecutar);
+        console.log(`Comando ${comando.nombre} cargado correctamente`);
+        
+        // Registrar comandos slash si existen
+        if (comando.data) {
+          console.log(`Registrando comando slash: ${comando.data.name}`);
+        }
+      } else {
+        console.error(`Error: El archivo ${archivo} no exporta correctamente un comando`);
+      }
+    } catch (error) {
+      console.error(`Error al cargar el comando ${archivo}:`, error);
+    }
   }
 }
 
@@ -136,6 +162,7 @@ client.on("messageCreate", async (message) => {
     }
   }
 });
+
 
 // 6. Inicia sesión
 client.login(process.env.DISCORD_TOKEN);
