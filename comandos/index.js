@@ -1,128 +1,117 @@
-// Bot de Discord usando Discord.js
+const fs = require('fs');
+const path = require('path');
 
-const { Client, GatewayIntentBits } = require("discord.js");
-require("dotenv").config();
+/**
+ * Manejador de comandos dinámicos
+ * 
+ * Este módulo se encarga de cargar y gestionar todos los comandos
+ * de forma dinámica desde las subcarpetas de comandos.
+ * 
+ * Estructura esperada:
+ * comandos/
+ *   ├── index.js         (este archivo)
+ *   ├── moderacion/      (comandos de moderación)
+ *   ├── utilidades/      (comandos de utilidad)
+ *   └── ...              (otras categorías)
+ */
 
-// Almacena listas de nombres por servidor
-const listasDeNombres = new Map();
+// Mapa para almacenar comandos y alias
+const commands = new Map();
+const aliases = new Map();
 
-// Crea una instancia del cliente
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-  ],
-});
+/**
+ * Carga todos los comandos de forma recursiva
+ * @param {string} dir - Directorio a escanear
+ * @param {Array} filelist - Lista de archivos (usado en la recursión)
+ * @returns {Array} Lista de comandos cargados
+ */
+function loadCommands(dir = __dirname, filelist = []) {
+    const files = fs.readdirSync(dir);
 
-// Evento cuando el bot está listo
-client.once("ready", () => {
-  console.log(`Bot conectado como ${client.user.tag}`);
-});
+    files.forEach(file => {
+        const fullPath = path.join(dir, file);
+        const stat = fs.statSync(fullPath);
 
-// Evento al recibir un mensaje
-client.on("messageCreate", async (message) => {
-  if (message.author.bot) return;
+        if (stat.isDirectory()) {
+            // Si es un directorio, cargar recursivamente
+            loadCommands(fullPath, filelist);
+        } else if (file !== 'index.js' && file.endsWith('.js')) {
+            try {
+                // Cargar el comando
+                const command = require(fullPath);
+                
+                // Verificar que el comando tenga las propiedades requeridas
+                if (command.nombre && command.ejecutar) {
+                    // Agregar a la lista de comandos
+                    commands.set(command.nombre, command);
+                    filelist.push({
+                        name: command.nombre,
+                        path: fullPath,
+                        category: path.basename(path.dirname(fullPath))
+                    });
 
-  // Comando básico
-  if (message.content === "!ping") {
-    message.reply("Pong!");
-  }
+                    // Registrar alias si existen
+                    if (command.alias && Array.isArray(command.alias)) {
+                        command.alias.forEach(alias => {
+                            aliases.set(alias, command.nombre);
+                        });
+                    }
 
-  // Comando para mostrar los comandos disponibles
-  if (message.content === "!comandos") {
-    message.reply(
-      "**Comandos disponibles:**\n" +
-        "`!ping` - Verifica que el bot esté activo\n" +
-        "`!agregar nombre1 nombre2 ...` - Agrega nombres para sorteo\n" +
-        "`!sortear` - Realiza un sorteo con los nombres agregados\n" +
-        "`!reiniciar` - Borra todos los nombres guardados\n" +
-        "`!lista` - Muestra los nombres actualmente agregados\n" +
-        "`!comandos` - Muestra esta lista de comandos\n" +
-        "`!avisar` - Manda una advertencia a un usuario\n" +
-        "`!rol_random` - Asigna un rol aleatorio al usuario\n" +
-        "`!gif` - Busca un GIF en Giphy\n" +
-        "`!cumpleaños` - Muestra la lista de cumpleaños registrados\n" +
-        "`!cumpleaños agregar dd/mm` - Registra tu cumpleaños\n" +
-        "`!cumpleaños lista` - Muestra la lista de cumpleaños registrados\n" +
-        "`!cumpleaños eliminar` - Elimina tu cumpleaños\n" +
-        "`!8ball` - Pregunta al 8ball\n" +
-        "`!encuesta` - Crea una encuesta\n" +
-        "`!ascii` - Convierte un texto en arte ASCII\n" +
-        "`!actividad` - Muestra los usuarios más activos\n" +
-        "`!stats` - Muestra estadísticas del servidor\n" +
-        "`!wiki` - Busca un tema en Wikipedia\n" +
-        "`!rps` - Juego de piedra, papel o tijeras\n" +
-        "`!memes` - Muestra un meme aleatorio\n" +
-        "`!chistes` - Muestra un chiste aleatorio\n" +
-        "`!nsfw [categoría]` - Muestra imágenes NSFW (solo canales NSFW)\n" +
-        "`!sfw [categoría]` - Muestra imágenes SFW (solo canales SFW)\n" +
-        "`!dolar` - Consulta precios USD/EUR en Venezuela (BCV, Paralelo, Binance)\n" +
-        "`!osrs precio` - Consulta precios de OSRS\n" +
-        "`!osrs alquimia` - Calcula la ganancia con High Alchemy\n" +
-        "`!radio <estación>` - Reproduce radios online 24/7\n" +
-        "`!radio list` - Ver estaciones disponibles\n" +
-        "`!radio stop` - Detener radio\n"
-    );
-  }
+                    console.log(`✅ Comando cargado: ${command.nombre} (${fullPath})`);
+                }
+            } catch (error) {
+                console.error(`❌ Error al cargar el comando ${file}:`, error);
+            }
+        }
+    });
 
-  // Comando para agregar nombres a la lista del servidor
-  if (message.content.startsWith("!agregar")) {
-    const nombres = message.content.split(" ").slice(1);
-    if (nombres.length === 0) {
-      message.reply(
-        "Debes agregar al menos un nombre. Ejemplo: !agregar Ana Pedro"
-      );
-      return;
-    }
+    return filelist;
+}
 
-    const idServidor = message.guild.id;
-    if (!listasDeNombres.has(idServidor)) {
-      listasDeNombres.set(idServidor, []);
-    }
+/**
+ * Obtiene un comando por su nombre o alias
+ * @param {string} name - Nombre o alias del comando
+ * @returns {Object|null} El comando o null si no se encuentra
+ */
+function getCommand(name) {
+    return commands.get(name) || 
+           (aliases.has(name) ? commands.get(aliases.get(name)) : null);
+}
 
-    const lista = listasDeNombres.get(idServidor);
-    lista.push(...nombres);
-    message.reply(`Nombres agregados: ${nombres.join(", ")}`);
-  }
+/**
+ * Obtiene todos los comandos agrupados por categoría
+ * @returns {Object} Comandos agrupados por categoría
+ */
+function getCommandsByCategory() {
+    const categories = {};
 
-  // Comando para realizar sorteo desde la lista almacenada
-  if (message.content === "!sortear") {
-    const idServidor = message.guild.id;
-    const lista = listasDeNombres.get(idServidor) || [];
+    commands.forEach((command, name) => {
+        const category = command.categoria || 'sin-categoria';
+        if (!categories[category]) {
+            categories[category] = [];
+        }
+        categories[category].push({
+            name,
+            description: command.descripcion || 'Sin descripción',
+            aliases: command.alias || [],
+            permissions: command.permisos || []
+        });
+    });
 
-    if (lista.length < 2) {
-      message.reply(
-        "Necesitas al menos dos nombres en la lista para sortear. Usa !agregar para añadir."
-      );
-      return;
-    }
+    return categories;
+}
 
-    const ganador = lista[Math.floor(Math.random() * lista.length)];
-    message.reply(`🎉 El ganador del coñazo es: **${ganador}**`);
-  }
+// Cargar comandos al iniciar
+const loadedCommands = loadCommands();
+console.log(`\n📊 Estadísticas de comandos:`);
+console.log(`✅ ${loadedCommands.length} comandos cargados`);
+console.log(`🔤 ${aliases.size} alias registrados\n`);
 
-  // Comando para reiniciar la lista
-  if (message.content === "!reiniciar") {
-    const idServidor = message.guild.id;
-    listasDeNombres.set(idServidor, []);
-    message.reply("La lista de nombres ha sido reiniciada.");
-  }
-
-  // Comando para mostrar la lista actual
-  if (message.content === "!lista") {
-    const idServidor = message.guild.id;
-    const lista = listasDeNombres.get(idServidor) || [];
-
-    if (lista.length === 0) {
-      message.reply(
-        "No hay nombres en la lista actualmente. Usa !agregar para añadir."
-      );
-    } else {
-      message.reply(`Nombres actuales en la lista: **${lista.join(", ")}** `);
-    }
-  }
-});
-
-// Inicia sesión con el token del bot
-client.login(process.env.DISCORD_TOKEN);
+// Exportar funcionalidades
+module.exports = {
+    commands,
+    aliases,
+    getCommand,
+    getCommandsByCategory,
+    loadCommands
+};

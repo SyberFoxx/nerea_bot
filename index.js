@@ -23,146 +23,96 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildMembers, // Necesario para los eventos de miembros
   ],
 });
 
-// 3. Carga los comandos
-const comandos = new Map();
-const comandosPath = path.join(__dirname, "comandos");
+// 3. Cargar comandos usando el nuevo cargador
+const { getCommand, getCommandsByCategory } = require('./comandos');
 
-// 3.1 Cargar comandos normales (archivos JS en /comandos)
-const archivosComandos = fs.readdirSync(comandosPath);
-for (const archivo of archivosComandos) {
-  const archivoPath = path.join(comandosPath, archivo);
-  if (fs.statSync(archivoPath).isFile() && archivo.endsWith(".js")) {
-    const comando = require(archivoPath);
-    comandos.set(comando.nombre, comando.ejecutar);
-  }
-}
-
-// 3.2 Cargar comandos de juegos (archivos JS en /comandos/juegos)
-const juegosPath = path.join(comandosPath, "juegos");
-if (fs.existsSync(juegosPath)) {
-  const archivosJuegos = fs.readdirSync(juegosPath);
-  for (const archivo of archivosJuegos) {
-    try {
-      if (!archivo.endsWith('.js')) continue;
-      console.log(`Cargando comando de juegos: ${archivo}`);
-      const comando = require(path.join(juegosPath, archivo));
-      if (comando && comando.nombre && comando.ejecutar) {
-        comandos.set(comando.nombre, comando.ejecutar);
-        console.log(`Comando ${comando.nombre} cargado correctamente`);
-        
-        // Registrar comandos slash si existen
-        if (comando.data) {
-          console.log(`Registrando comando slash: ${comando.data.name}`);
-        }
-      } else {
-        console.error(`Error: El archivo ${archivo} no exporta correctamente un comando`);
-      }
-    } catch (error) {
-      console.error(`Error al cargar el comando ${archivo}:`, error);
-    }
-  }
-}
-
-// 3.3 Cargar comandos de utilidad
-const utilidadesPath = path.join(__dirname, "comandos", "utilidades");
-if (fs.existsSync(utilidadesPath)) {
-  const archivosUtilidades = fs.readdirSync(utilidadesPath);
-  for (const archivo of archivosUtilidades) {
-    const comando = require(`./comandos/utilidades/${archivo}`);
-    comandos.set(comando.nombre, comando.ejecutar);
-  }
-}
-
-// 3.4 Cargar comandos de moderación
-const moderacionPath = path.join(__dirname, "comandos", "moderacion");
-if (fs.existsSync(moderacionPath)) {
-  const archivosModeracion = fs.readdirSync(moderacionPath);
-  for (const archivo of archivosModeracion) {
-    const comando = require(`./comandos/moderacion/${archivo}`);
-    comandos.set(comando.nombre, comando.ejecutar);
-  }
-}
-
-// 3.5 Cargar comandos de información
-const informacionPath = path.join(__dirname, "comandos", "informacion");
-if (fs.existsSync(informacionPath)) {
-  const archivosInformacion = fs.readdirSync(informacionPath);
-  for (const archivo of archivosInformacion) {
-    const comando = require(`./comandos/informacion/${archivo}`);
-    comandos.set(comando.nombre, comando.ejecutar);
-  }
-}
-
-// 3.6 Cargar comandos de productividad
-const productividadPath = path.join(__dirname, "comandos", "productividad");
-if (fs.existsSync(productividadPath)) {
-  const archivosProductividad = fs.readdirSync(productividadPath);
-  for (const archivo of archivosProductividad) {
-    const comando = require(`./comandos/productividad/${archivo}`);
-    comandos.set(comando.nombre, comando.ejecutar);
-  }
-}
-
-// 3.7 Cargar comandos de estadisticasServidor
-const estadisticasServidorPath = path.join(__dirname, 'comandos', 'estadisticasServidor');
-if (fs.existsSync(estadisticasServidorPath)) {
-  const archivosEstadisticasServidor = fs.readdirSync(estadisticasServidorPath);
-  for (const archivo of archivosEstadisticasServidor) {
-    const comando = require(path.join(estadisticasServidorPath, archivo));
-    comandos.set(comando.nombre, comando.ejecutar);
-  }
-}
-
-// 3.8 Cargar comandos de IA (Chat con Cohere)
-const iaPath = path.join(__dirname, 'comandos', 'IA');
-if (fs.existsSync(iaPath)) {
-  const archivosIA = fs.readdirSync(iaPath);
-  for (const archivo of archivosIA) {
-    const comando = require(path.join(iaPath, archivo));
-    comandos.set(comando.nombre, comando.ejecutar);
-  }
-}
-
-// 3.9 Cargar comandos de extras creativos
-const extrasCreativosPath = path.join(__dirname, 'comandos', 'extrasCreativos');
-if (fs.existsSync(extrasCreativosPath)) {
-  const archivosExtrasCreativos = fs.readdirSync(extrasCreativosPath);
-  for (const archivo of archivosExtrasCreativos) {
-    const comando = require(path.join(extrasCreativosPath, archivo));
-    comandos.set(comando.nombre, comando.ejecutar);
-  }
-}
-
-// 4. Cuando el bot esté listo
-client.once("ready", () => {
-  console.log(`Bot conectado como ${client.user.tag}`);
+// 3.1 Obtener comandos por categoría para uso futuro
+const comandosPorCategoria = getCommandsByCategory();
+console.log('\n📂 Categorías de comandos cargadas:');
+Object.keys(comandosPorCategoria).forEach(categoria => {
+  console.log(`  - ${categoria}: ${comandosPorCategoria[categoria].length} comandos`);
 });
 
-// 5. Cuando reciba un mensaje
-client.on("messageCreate", async (message) => {
-  if (message.author.bot) return; // Evitar que los bots interactúen
+// 3.2 Función para manejar comandos
+async function manejarComando(message) {
+  if (!message.content.startsWith(prefix) || message.author.bot) return;
 
-  // Registrar la actividad de los usuarios
-  registrarActividad(message.author.id); // Llamamos al sistema de tracking para registrar la actividad
-
-  if (!message.content.startsWith("!")) return; // Solo ejecutamos comandos si empiezan con "!"
-
-  const args = message.content.slice(1).trim().split(/ +/);
+  const args = message.content.slice(prefix.length).trim().split(/ +/);
   const nombreComando = args.shift().toLowerCase();
 
-  if (comandos.has(nombreComando)) {
-    try {
-      await comandos.get(nombreComando)(message, args);
-    } catch (error) {
-      console.error(error);
-      message.reply("Hubo un error al ejecutar el comando.");
+  const comando = getCommand(nombreComando);
+  if (!comando) return;
+
+  try {
+    // Verificar permisos si es necesario
+    if (comando.permisos && !message.member.permissions.has(comando.permisos)) {
+      return message.reply('❌ No tienes permisos para usar este comando.');
     }
+
+    // Verificar si es solo para servidores
+    if (comando.soloServidor && !message.guild) {
+      return message.reply('❌ Este comando solo puede usarse en servidores.');
+    }
+
+    // Verificar si es solo para NSFW
+    if (comando.nsfw && !message.channel.nsfw) {
+      return message.reply('❌ Este comando solo puede usarse en canales NSFW.');
+    }
+
+    // Ejecutar el comando
+    await comando.ejecutar(message, args);
+  } catch (error) {
+    console.error(`Error al ejecutar el comando ${nombreComando}:`, error);
+    message.reply('❌ Hubo un error al ejecutar el comando.');
   }
+}
+
+// 3.3 Configurar el manejador de mensajes
+client.on('messageCreate', manejarComando);
+
+// 3.4 Configurar el prefijo del bot
+const prefix = '!';
+
+// 4. Eventos del bot
+client.once('ready', () => {
+  console.log(`✅ ${client.user.tag} está en línea y listo para funcionar!`);
+  console.log(`📊 Comandos cargados: ${Object.values(getCommandsByCategory()).reduce((acc, cat) => acc + cat.length, 0)}`);
+  console.log(`🔄 Prefijo configurado: ${prefix}`);
+  
+  // Establecer estado del bot
+  client.user.setActivity(`Usa ${prefix}ayuda para ver comandos`, { type: 'PLAYING' });
+  
+  // Registrar actividad del bot
+  registrarActividad(client.user.id);
 });
 
+// 5. Manejo de errores
+process.on('unhandledRejection', error => {
+  console.error('Error no manejado en una promesa:', error);
+});
 
-// 6. Inicia sesión
+process.on('uncaughtException', error => {
+  console.error('Excepción no capturada:', error);
+});
+
+// 6. Cargar eventos
+const eventosPath = path.join(__dirname, 'eventos');
+const archivosEventos = fs.readdirSync(eventosPath).filter(archivo => archivo.endsWith('.js'));
+
+for (const archivo of archivosEventos) {
+    const rutaArchivo = path.join(eventosPath, archivo);
+    const evento = require(rutaArchivo);
+    if (evento.once) {
+        client.once(evento.name, (...args) => evento.execute(...args));
+    } else {
+        client.on(evento.name, (...args) => evento.execute(...args));
+    }
+    console.log(`Evento cargado: ${evento.name}`);
+}
+
+// 7. Inicia sesión
 client.login(process.env.DISCORD_TOKEN);
