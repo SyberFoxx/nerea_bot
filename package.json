@@ -18,6 +18,7 @@
     "@discordjs/voice": "^0.18.0",
     "@distube/ytdl-core": "^4.16.12",
     "axios": "^1.9.0",
+    "better-sqlite3": "^12.4.1",
     "canvas": "^3.2.0",
     "chart.js": "^4.5.0",
     "cohere-ai": "^7.17.1",
@@ -35,6 +36,7 @@
     "pixiv-img": "^1.0.0",
     "pixiv.js": "^0.18.0",
     "snoowrap": "^1.23.0",
+    "sqlite3": "^5.1.7",
     "yt-search": "^2.13.1"
   }
 }

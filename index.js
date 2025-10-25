@@ -6,6 +6,8 @@ const path = require("path");
 const {
   registrarActividad,
 } = require("./comandos/estadisticasServidor/_actividadTracking");
+const xpSystem = require("./sistemas/xpSystem");
+const { setupXPEvents } = require("./comandos/utilidades/nivel");
 
 // Configurar FFmpeg estático
 try {
@@ -24,7 +26,11 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.GuildMembers, // Necesario para los eventos de miembros
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.MessageContent
   ],
+  partials: ['MESSAGE', 'CHANNEL', 'REACTION'],
 });
 
 // 3. Cargar comandos usando el nuevo cargador
@@ -75,7 +81,10 @@ async function manejarComando(message) {
 client.on('messageCreate', manejarComando);
 
 // 3.4 Configurar el prefijo del bot
-const prefix = '!';
+const prefix = process.env.PREFIX || '!';
+
+// 4. Inicializar el sistema de XP
+setupXPEvents(client);
 
 // 4. Eventos del bot
 client.once('ready', () => {
