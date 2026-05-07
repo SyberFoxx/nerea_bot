@@ -3,15 +3,31 @@
  */
 import { supabase } from '../lib/supabase';
 import { consumeItem } from './inventory';
+import { updateBalance } from './economy';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
+
+export type Rarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
+
+export interface PetStats {
+  max_hunger:    number;
+  max_happiness: number;
+  xp_bonus:      number;   // 0.10 = +10% XP por mensaje
+  daily_bonus:   number;   // 0.10 = +10% en daily/weekly
+  game_bonus:    number;   // 0.10 = +10% ganancias en juegos
+  lucky:         number;   // 0.10 = 10% chance de no gastar ítem
+  mute_shield:   boolean;  // protección anti-mute
+}
 
 export interface PetType {
   slug:        string;
   name:        string;
   emoji:       string;
   description: string;
-  base_stats:  { max_hunger: number; max_happiness: number; xp_bonus: number };
+  rarity:      Rarity;
+  min_level:   number;
+  price:       number;
+  base_stats:  PetStats;
 }
 
 export interface UserPet {
@@ -28,20 +44,44 @@ export interface UserPet {
   pet_types?:     PetType;
 }
 
-// XP necesario para subir de nivel la mascota
+export interface InteractResult {
+  success:  boolean;
+  reason?:  'no_pet' | 'no_item' | 'already_full';
+  pet?:     UserPet;
+  levelUp?: boolean;
+}
+
+export type AdoptResult =
+  | { success: true }
+  | { success: false; reason: 'already_has_pet' | 'invalid_type' | 'level_too_low' | 'insufficient_funds' };
+
+// ─── Constantes ───────────────────────────────────────────────────────────────
+
+export const RARITY_META: Record<Rarity, { label: string; emoji: string; color: number }> = {
+  common:    { label: 'Común',        emoji: '🟢', color: 0x2ecc71 },
+  uncommon:  { label: 'Poco común',   emoji: '🔵', color: 0x3498db },
+  rare:      { label: 'Raro',         emoji: '🟣', color: 0x9b59b6 },
+  epic:      { label: 'Épico',        emoji: '🟠', color: 0xe67e22 },
+  legendary: { label: 'Legendario',   emoji: '🔴', color: 0xe74c3c },
+};
+
 export function petXpRequired(level: number): number {
   return 50 * level + 100;
 }
 
+/** Verifica si la mascota está en buen estado (hambre y felicidad > 50). */
+export function isPetHealthy(pet: UserPet): boolean {
+  return pet.hunger > 50 && pet.happiness > 50;
+}
+
 // ─── Decay pasivo ─────────────────────────────────────────────────────────────
-// Hambre y felicidad bajan con el tiempo aunque no interactúes
 
 function applyDecay(pet: UserPet): { hunger: number; happiness: number } {
   const now        = Date.now();
   const fedAgo     = now - new Date(pet.last_fed_at).getTime();
   const playedAgo  = now - new Date(pet.last_played_at).getTime();
 
-  // -1 de hambre cada 30 min, -1 de felicidad cada 45 min
+  // -1 hambre cada 30 min, -1 felicidad cada 45 min
   const hungerLoss    = Math.floor(fedAgo    / (30 * 60 * 1000));
   const happinessLoss = Math.floor(playedAgo / (45 * 60 * 1000));
 
@@ -51,15 +91,19 @@ function applyDecay(pet: UserPet): { hunger: number; happiness: number } {
   };
 }
 
-// ─── Queries ──────────────────────────────────────────────────────────────────
+// ─── Queries base ─────────────────────────────────────────────────────────────
 
-export async function getPetTypes(): Promise<PetType[]> {
-  const { data, error } = await supabase
+export async function getPetTypes(rarity?: Rarity): Promise<PetType[]> {
+  let query = supabase
     .from('pet_types')
     .select('*')
-    .order('slug');
+    .order('min_level', { ascending: true });
+
+  if (rarity) query = query.eq('rarity', rarity);
+
+  const { data, error } = await query;
   if (error) throw error;
-  return data ?? [];
+  return (data ?? []) as PetType[];
 }
 
 export async function getPetType(slug: string): Promise<PetType | null> {
@@ -70,7 +114,7 @@ export async function getPetType(slug: string): Promise<PetType | null> {
     .single();
   if (error && error.code === 'PGRST116') return null;
   if (error) throw error;
-  return data;
+  return data as PetType;
 }
 
 export async function getUserPet(userId: string, guildId: string): Promise<UserPet | null> {
@@ -83,11 +127,10 @@ export async function getUserPet(userId: string, guildId: string): Promise<UserP
 
   if (error && error.code === 'PGRST116') return null;
   if (error) throw error;
-
   if (!data) return null;
 
-  // Aplicar decay y actualizar en DB si cambió algo
-  const decayed = applyDecay(data);
+  // Aplicar decay
+  const decayed = applyDecay(data as UserPet);
   if (decayed.hunger !== data.hunger || decayed.happiness !== data.happiness) {
     await supabase
       .from('user_pets')
@@ -98,22 +141,35 @@ export async function getUserPet(userId: string, guildId: string): Promise<UserP
     data.happiness = decayed.happiness;
   }
 
-  return data;
+  return data as UserPet;
 }
 
 // ─── Adoptar ──────────────────────────────────────────────────────────────────
 
 export async function adoptPet(
-  userId: string,
-  guildId: string,
-  typeSlug: string,
-  name: string,
-): Promise<{ success: boolean; reason?: 'already_has_pet' | 'invalid_type' }> {
+  userId:    string,
+  guildId:   string,
+  typeSlug:  string,
+  name:      string,
+  userLevel: number,
+): Promise<AdoptResult> {
   const existing = await getUserPet(userId, guildId);
   if (existing) return { success: false, reason: 'already_has_pet' };
 
   const type = await getPetType(typeSlug);
   if (!type) return { success: false, reason: 'invalid_type' };
+
+  // Verificar nivel mínimo
+  if (userLevel < type.min_level) return { success: false, reason: 'level_too_low' };
+
+  // Cobrar si no es gratis
+  if (type.price > 0) {
+    try {
+      await updateBalance(userId, guildId, -type.price, 'shop', `Adopción: ${type.name}`);
+    } catch {
+      return { success: false, reason: 'insufficient_funds' };
+    }
+  }
 
   const { error } = await supabase.from('user_pets').insert({
     user_id:        userId,
@@ -134,42 +190,33 @@ export async function adoptPet(
 
 // ─── Alimentar ────────────────────────────────────────────────────────────────
 
-export interface InteractResult {
-  success:   boolean;
-  reason?:   'no_pet' | 'no_item' | 'already_full';
-  pet?:      UserPet;
-  levelUp?:  boolean;
-}
-
 export async function feedPet(
-  userId: string,
-  guildId: string,
+  userId:   string,
+  guildId:  string,
   foodSlug: string,
 ): Promise<InteractResult> {
   const pet = await getUserPet(userId, guildId);
   if (!pet) return { success: false, reason: 'no_pet' };
-
   if (pet.hunger >= 100) return { success: false, reason: 'already_full' };
 
-  // Consumir ítem del inventario
-  const consumed = await consumeItem(userId, guildId, foodSlug);
-  if (!consumed) return { success: false, reason: 'no_item' };
+  // Lucky: chance de no gastar el ítem
+  const lucky = (pet.pet_types?.base_stats.lucky ?? 0);
+  const skipConsume = lucky > 0 && Math.random() < lucky;
 
-  // Obtener cuánto restaura el ítem
+  if (!skipConsume) {
+    const consumed = await consumeItem(userId, guildId, foodSlug);
+    if (!consumed) return { success: false, reason: 'no_item' };
+  }
+
   const { data: itemData } = await supabase
-    .from('shop_items')
-    .select('effect')
-    .eq('slug', foodSlug)
-    .single();
+    .from('shop_items').select('effect').eq('slug', foodSlug).single();
 
-  const restore = (itemData?.effect as any)?.hunger_restore ?? 30;
+  const restore  = (itemData?.effect as any)?.hunger_restore ?? 30;
   const newHunger = Math.min(100, pet.hunger + restore);
-
-  // Dar XP a la mascota por ser alimentada
-  const xpGain  = 10;
-  const newXp   = pet.xp + xpGain;
-  const needed  = petXpRequired(pet.level);
-  const levelUp = newXp >= needed;
+  const xpGain   = 10;
+  const newXp    = pet.xp + xpGain;
+  const needed   = petXpRequired(pet.level);
+  const levelUp  = newXp >= needed;
   const newLevel = levelUp ? pet.level + 1 : pet.level;
 
   const { data: updated, error } = await supabase
@@ -187,38 +234,38 @@ export async function feedPet(
     .single();
 
   if (error) throw error;
-  return { success: true, pet: updated, levelUp };
+  return { success: true, pet: updated as UserPet, levelUp };
 }
 
 // ─── Jugar ────────────────────────────────────────────────────────────────────
 
 export async function playWithPet(
-  userId: string,
+  userId:  string,
   guildId: string,
   toySlug: string,
 ): Promise<InteractResult> {
   const pet = await getUserPet(userId, guildId);
   if (!pet) return { success: false, reason: 'no_pet' };
-
   if (pet.happiness >= 100) return { success: false, reason: 'already_full' };
 
-  const consumed = await consumeItem(userId, guildId, toySlug);
-  if (!consumed) return { success: false, reason: 'no_item' };
+  const lucky = (pet.pet_types?.base_stats.lucky ?? 0);
+  const skipConsume = lucky > 0 && Math.random() < lucky;
+
+  if (!skipConsume) {
+    const consumed = await consumeItem(userId, guildId, toySlug);
+    if (!consumed) return { success: false, reason: 'no_item' };
+  }
 
   const { data: itemData } = await supabase
-    .from('shop_items')
-    .select('effect')
-    .eq('slug', toySlug)
-    .single();
+    .from('shop_items').select('effect').eq('slug', toySlug).single();
 
-  const restore = (itemData?.effect as any)?.happiness_restore ?? 30;
+  const restore      = (itemData?.effect as any)?.happiness_restore ?? 30;
   const newHappiness = Math.min(100, pet.happiness + restore);
-
-  const xpGain  = 15;
-  const newXp   = pet.xp + xpGain;
-  const needed  = petXpRequired(pet.level);
-  const levelUp = newXp >= needed;
-  const newLevel = levelUp ? pet.level + 1 : pet.level;
+  const xpGain       = 15;
+  const newXp        = pet.xp + xpGain;
+  const needed       = petXpRequired(pet.level);
+  const levelUp      = newXp >= needed;
+  const newLevel     = levelUp ? pet.level + 1 : pet.level;
 
   const { data: updated, error } = await supabase
     .from('user_pets')
@@ -235,7 +282,7 @@ export async function playWithPet(
     .single();
 
   if (error) throw error;
-  return { success: true, pet: updated, levelUp };
+  return { success: true, pet: updated as UserPet, levelUp };
 }
 
 // ─── Renombrar ────────────────────────────────────────────────────────────────
@@ -243,27 +290,41 @@ export async function playWithPet(
 export async function renamePet(userId: string, guildId: string, newName: string): Promise<boolean> {
   const pet = await getUserPet(userId, guildId);
   if (!pet) return false;
-
   await supabase
     .from('user_pets')
     .update({ name: newName.slice(0, 32), updated_at: new Date().toISOString() })
     .eq('user_id', userId)
     .eq('guild_id', guildId);
-
   return true;
 }
 
-// ─── Bonus de XP de la mascota ────────────────────────────────────────────────
+// ─── Bonus getters ────────────────────────────────────────────────────────────
 
-/** Retorna el multiplicador de XP que da la mascota (ej: 1.05 = +5%). */
+/** Multiplicador de XP por mensaje (ej: 1.10 = +10%). Solo si mascota sana. */
 export async function getPetXpBonus(userId: string, guildId: string): Promise<number> {
   const pet = await getUserPet(userId, guildId);
-  if (!pet || !pet.pet_types) return 1;
+  if (!pet?.pet_types || !isPetHealthy(pet)) return 1;
+  const bonus = pet.pet_types.base_stats.xp_bonus * pet.level;
+  return 1 + Math.min(bonus, 0.5);
+}
 
-  // Si la mascota está triste o hambrienta, no da bonus
-  if (pet.hunger < 20 || pet.happiness < 20) return 1;
+/** Multiplicador de daily/weekly. Solo si mascota sana. */
+export async function getPetDailyBonus(userId: string, guildId: string): Promise<number> {
+  const pet = await getUserPet(userId, guildId);
+  if (!pet?.pet_types || !isPetHealthy(pet)) return 1;
+  return 1 + (pet.pet_types.base_stats.daily_bonus ?? 0);
+}
 
-  const base  = pet.pet_types.base_stats.xp_bonus ?? 0;
-  const bonus = base * pet.level; // escala con el nivel
-  return 1 + Math.min(bonus, 0.5); // máximo +50%
+/** Multiplicador de ganancias en juegos. Solo si mascota sana. */
+export async function getPetGameBonus(userId: string, guildId: string): Promise<number> {
+  const pet = await getUserPet(userId, guildId);
+  if (!pet?.pet_types || !isPetHealthy(pet)) return 1;
+  return 1 + (pet.pet_types.base_stats.game_bonus ?? 0);
+}
+
+/** Tiene mute_shield activo. */
+export async function hasMuteShield(userId: string, guildId: string): Promise<boolean> {
+  const pet = await getUserPet(userId, guildId);
+  if (!pet?.pet_types || !isPetHealthy(pet)) return false;
+  return pet.pet_types.base_stats.mute_shield === true;
 }

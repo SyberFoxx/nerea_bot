@@ -6,7 +6,7 @@ import {
   EmbedBuilder,
 } from 'discord.js';
 import { Comando } from '../../types';
-import { getShopItems, buyItem, ShopItem } from '../../sistemas/inventory';
+import { getShopItems, getCosmeticItems, buyItem, ShopItem } from '../../sistemas/inventory';
 import { getWallet, getGuildEconomySettings } from '../../sistemas/economy';
 
 // ─── Categorías ───────────────────────────────────────────────────────────────
@@ -14,7 +14,7 @@ import { getWallet, getGuildEconomySettings } from '../../sistemas/economy';
 type Category = 'all' | 'pet_food' | 'pet_toy' | 'consumable' | 'cosmetic';
 
 const CATEGORIES: { id: Category; label: string; emoji: string }[] = [
-  { id: 'all',        label: 'Todo',       emoji: '🏪' },
+  { id: 'all',        label: 'Resumen',    emoji: '🏪' },
   { id: 'pet_food',   label: 'Comida',     emoji: '🍖' },
   { id: 'pet_toy',    label: 'Juguetes',   emoji: '🎾' },
   { id: 'consumable', label: 'Boosts',     emoji: '⚡' },
@@ -29,36 +29,104 @@ async function buildShopEmbed(
   category: Category,
   guildName: string,
 ): Promise<EmbedBuilder> {
-  const [allItems, wallet, settings] = await Promise.all([
-    getShopItems(category === 'all' ? undefined : category),
+  const [wallet, settings] = await Promise.all([
     getWallet(userId, guildId),
     getGuildEconomySettings(guildId),
   ]);
 
   const cat = CATEGORIES.find(c => c.id === category)!;
+  const footerText = `Tu saldo: ${settings.currency_emoji} ${wallet.balance.toLocaleString()} ${settings.currency_name}  •  !tienda comprar <slug>`;
+
+  // ── Pestaña Resumen: muestra conteo por categoría ─────────────────────────
+  if (category === 'all') {
+    const [foods, toys, boosts, cosmetics] = await Promise.all([
+      getShopItems('pet_food'),
+      getShopItems('pet_toy'),
+      getShopItems('consumable'),
+      getCosmeticItems(),
+    ]);
+
+    return new EmbedBuilder()
+      .setTitle(`🏪 Tienda — ${guildName}`)
+      .setDescription('Selecciona una categoría con los botones para ver los ítems disponibles.')
+      .setColor(0x3498db)
+      .addFields(
+        { name: '🍖 Comida para mascotas', value: `${foods.length} ítems disponibles`, inline: true },
+        { name: '🎾 Juguetes para mascotas', value: `${toys.length} ítems disponibles`, inline: true },
+        { name: '⚡ Boosts de XP/juegos', value: `${boosts.length} ítems disponibles`, inline: true },
+        { name: '🎨 Cosméticos', value: `${cosmetics.length} ítems (colores, títulos, marcos)`, inline: true },
+      )
+      .setFooter({ text: footerText })
+      .setTimestamp();
+  }
+
+  // ── Categorías específicas ────────────────────────────────────────────────
+  const allItems = category === 'cosmetic'
+    ? await getCosmeticItems()
+    : await getShopItems(category);
 
   if (allItems.length === 0) {
     return new EmbedBuilder()
       .setTitle(`${cat.emoji} Tienda — ${cat.label}`)
       .setDescription('No hay ítems en esta categoría por ahora.')
-      .setColor(0x3498db);
+      .setColor(0x3498db)
+      .setFooter({ text: footerText });
   }
 
-  const itemLines = allItems.map((item: ShopItem) =>
-    [
-      `${item.emoji} **${item.name}** — ${settings.currency_emoji} **${item.price.toLocaleString()}**`,
-      `> ${item.description}`,
-      `> Comprar: \`!tienda comprar ${item.slug}\``,
-    ].join('\n')
-  );
+  // Agrupar cosméticos por subtipo para mejor presentación
+  if (category === 'cosmetic') {
+    const colors  = allItems.filter((i: ShopItem) => i.type === 'color');
+    const titles  = allItems.filter((i: ShopItem) => i.type === 'title');
+    const frames  = allItems.filter((i: ShopItem) => i.type === 'frame');
+    const other   = allItems.filter((i: ShopItem) => !['color','title','frame'].includes(i.type));
+
+    const fields: { name: string; value: string; inline: boolean }[] = [];
+
+    if (colors.length) fields.push({
+      name: '🎨 Colores de perfil',
+      value: colors.map((i: ShopItem) => `${i.emoji} **${i.name}** — ${settings.currency_emoji} ${i.price.toLocaleString()} \`${i.slug}\``).join('\n'),
+      inline: false,
+    });
+    if (titles.length) fields.push({
+      name: '🏷️ Títulos',
+      value: titles.map((i: ShopItem) => `${i.emoji} **${i.name}** — ${settings.currency_emoji} ${i.price.toLocaleString()} \`${i.slug}\`\n*${i.description}*`).join('\n'),
+      inline: false,
+    });
+    if (frames.length) fields.push({
+      name: '🖼️ Marcos de perfil',
+      value: frames.map((i: ShopItem) => `${i.emoji} **${i.name}** — ${settings.currency_emoji} ${i.price.toLocaleString()} \`${i.slug}\`\n*${i.description}*`).join('\n'),
+      inline: false,
+    });
+    if (other.length) fields.push({
+      name: '📦 Otros',
+      value: other.map((i: ShopItem) => `${i.emoji} **${i.name}** — ${settings.currency_emoji} ${i.price.toLocaleString()} \`${i.slug}\``).join('\n'),
+      inline: false,
+    });
+
+    // Truncar fields que superen 1024 chars
+    const safeFields = fields.map(f => ({
+      ...f,
+      value: f.value.length > 1024 ? f.value.slice(0, 1020) + '...' : f.value,
+    }));
+
+    return new EmbedBuilder()
+      .setTitle(`${cat.emoji} Tienda — ${cat.label} | ${guildName}`)
+      .setColor(0x9b59b6)
+      .addFields(safeFields)
+      .setFooter({ text: footerText })
+      .setTimestamp();
+  }
+
+  // Otras categorías: lista simple
+  const lines = allItems.map((item: ShopItem) =>
+    `${item.emoji} **${item.name}** — ${settings.currency_emoji} ${item.price.toLocaleString()} \`${item.slug}\`\n*${item.description}*`
+  ).join('\n\n');
 
   return new EmbedBuilder()
     .setTitle(`${cat.emoji} Tienda — ${cat.label} | ${guildName}`)
-    .setDescription(itemLines.join('\n\n'))
+    .setDescription(lines.length > 4096 ? lines.slice(0, 4090) + '...' : lines)
     .setColor(0x3498db)
-    .setFooter({
-      text: `Tu saldo: ${settings.currency_emoji} ${wallet.balance.toLocaleString()} ${settings.currency_name}  •  !tienda comprar <slug>`,
-    })
+    .setFooter({ text: footerText })
     .setTimestamp();
 }
 

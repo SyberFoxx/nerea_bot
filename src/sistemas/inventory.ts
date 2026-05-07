@@ -13,7 +13,7 @@ export interface ShopItem {
   description: string;
   emoji:       string;
   price:       number;
-  type:        'consumable' | 'cosmetic' | 'role' | 'pet_food' | 'pet_toy';
+  type:        'consumable' | 'cosmetic' | 'role' | 'pet_food' | 'pet_toy' | 'color' | 'title' | 'frame';
   effect:      Record<string, any> | null;
   is_active:   boolean;
 }
@@ -36,6 +36,19 @@ export async function getShopItems(type?: string): Promise<ShopItem[]> {
   if (type) query = query.eq('type', type);
 
   const { data, error } = await query;
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** Obtiene ítems cosméticos (color + title + frame agrupados). */
+export async function getCosmeticItems(): Promise<ShopItem[]> {
+  const { data, error } = await supabase
+    .from('shop_items')
+    .select('*')
+    .eq('is_active', true)
+    .in('type', ['color', 'title', 'frame', 'cosmetic'])
+    .order('price', { ascending: true });
+
   if (error) throw error;
   return data ?? [];
 }

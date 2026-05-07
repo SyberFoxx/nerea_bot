@@ -1,17 +1,22 @@
 import { createCanvas, loadImage, SKRSContext2D } from '@napi-rs/canvas';
+import { getFrameStyle, getColorHex, getTitleData } from './frameStyles';
 
 // ─── Tipos ─────────────────────────────────────────────────────────────────────
 
 export interface ProfileCardOptions {
-  username:    string;
-  avatarUrl:   string;
-  level:       number;
-  xp:          number;
-  xpNeeded:    number;
-  rank:        number;
-  accentColor: string;
-  joinedAt:    string;
-  roles:       string[];
+  username:       string;
+  avatarUrl:      string;
+  level:          number;
+  xp:             number;
+  xpNeeded:       number;
+  rank:           number;
+  accentColor:    string;
+  joinedAt:       string;
+  roles:          string[];
+  // Cosméticos opcionales
+  equippedFrame?: string | null;
+  equippedTitle?: string | null;
+  equippedColor?: string | null;
 }
 
 export interface RankCardOptions {
@@ -72,34 +77,310 @@ async function drawCircularAvatar(
   cx: number, cy: number,
   radius: number,
   borderColor: string,
-  borderWidth = 4
+  borderWidth = 4,
+  frameSlug?: string | null,
 ): Promise<void> {
-  const img = await loadImage(url);
+  const img        = await loadImage(url);
+  const frameStyle = frameSlug ? getFrameStyle(frameSlug) : null;
+  const bw         = frameStyle?.borderWidth ?? borderWidth;
+  const glowColor  = frameStyle?.glowColor   ?? borderColor;
+  const glowBlur   = frameStyle?.glowBlur    ?? 14;
+  const style      = frameStyle?.style       ?? 'solid';
+  const extra      = frameStyle?.extraColor;
+  const main       = frameStyle?.borderColor ?? borderColor;
 
-  // Glow suave
+  // ── Glow exterior ────────────────────────────────────────────────────────
+  if (glowBlur > 0) {
+    ctx.save();
+    ctx.shadowColor = rgba(glowColor, 0.85);
+    ctx.shadowBlur  = glowBlur;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius + bw, 0, Math.PI * 2);
+    ctx.strokeStyle = rgba(glowColor, 0.6);
+    ctx.lineWidth   = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // ── Render específico por estilo ─────────────────────────────────────────
   ctx.save();
-  ctx.shadowColor = rgba(borderColor, 0.5);
-  ctx.shadowBlur  = 18;
+
+  if (style === 'solid') {
+    // Simple borde sólido
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius + bw, 0, Math.PI * 2);
+    ctx.fillStyle = main;
+    ctx.fill();
+
+  } else if (style === 'double') {
+    // Marco dorado con doble anillo y detalles
+    // Anillo exterior fino
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius + bw + 4, 0, Math.PI * 2);
+    ctx.strokeStyle = extra ?? main;
+    ctx.lineWidth   = 2;
+    ctx.stroke();
+    // Relleno principal con gradiente dorado
+    const goldGrad = ctx.createLinearGradient(cx - radius, cy - radius, cx + radius, cy + radius);
+    goldGrad.addColorStop(0,   '#ffd700');
+    goldGrad.addColorStop(0.3, '#ffec6e');
+    goldGrad.addColorStop(0.6, '#b8860b');
+    goldGrad.addColorStop(1,   '#ffd700');
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius + bw, 0, Math.PI * 2);
+    ctx.fillStyle = goldGrad;
+    ctx.fill();
+    // Anillo interior
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius + 3, 0, Math.PI * 2);
+    ctx.strokeStyle = extra ?? '#b8860b';
+    ctx.lineWidth   = 1.5;
+    ctx.stroke();
+
+  } else if (style === 'glow') {
+    // Borde con gradiente cónico y glow intenso
+    const conicGrad = ctx.createLinearGradient(cx - radius, cy - radius, cx + radius, cy + radius);
+    conicGrad.addColorStop(0,   main);
+    conicGrad.addColorStop(0.5, lighten(main, 50));
+    conicGrad.addColorStop(1,   main);
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius + bw, 0, Math.PI * 2);
+    ctx.fillStyle = conicGrad;
+    ctx.fill();
+
+  } else if (style === 'fire') {
+    // Marco de fuego: gradiente naranja-rojo-amarillo con "llamas" en los bordes
+    const fireGrad = ctx.createLinearGradient(cx, cy - radius - bw, cx, cy + radius + bw);
+    fireGrad.addColorStop(0,    '#ffd700');
+    fireGrad.addColorStop(0.25, '#ff8c00');
+    fireGrad.addColorStop(0.5,  '#ff4500');
+    fireGrad.addColorStop(0.75, '#cc2200');
+    fireGrad.addColorStop(1,    '#ff4500');
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius + bw, 0, Math.PI * 2);
+    ctx.fillStyle = fireGrad;
+    ctx.fill();
+    // Puntas de llama (triángulos pequeños alrededor)
+    const rng = (s: number) => { const x = Math.sin(s) * 10000; return x - Math.floor(x); };
+    for (let i = 0; i < 12; i++) {
+      const angle  = (i / 12) * Math.PI * 2;
+      const jitter = (rng(i * 3.7) - 0.5) * 0.3;
+      const a      = angle + jitter;
+      const r1     = radius + bw + 2;
+      const r2     = radius + bw + 8 + rng(i * 5.1) * 8;
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(a - 0.15) * r1, cy + Math.sin(a - 0.15) * r1);
+      ctx.lineTo(cx + Math.cos(a) * r2,         cy + Math.sin(a) * r2);
+      ctx.lineTo(cx + Math.cos(a + 0.15) * r1, cy + Math.sin(a + 0.15) * r1);
+      ctx.fillStyle = rgba('#ffd700', 0.7 - i * 0.03);
+      ctx.fill();
+    }
+
+  } else if (style === 'ice') {
+    // Marco de hielo: azul claro con cristales
+    const iceGrad = ctx.createLinearGradient(cx - radius, cy - radius, cx + radius, cy + radius);
+    iceGrad.addColorStop(0,   '#e0f7ff');
+    iceGrad.addColorStop(0.3, '#a8edff');
+    iceGrad.addColorStop(0.6, '#00d2ff');
+    iceGrad.addColorStop(1,   '#e0f7ff');
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius + bw, 0, Math.PI * 2);
+    ctx.fillStyle = iceGrad;
+    ctx.fill();
+    // Cristales de hielo (líneas radiales)
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.lineWidth   = 1.5;
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2;
+      const r1    = radius + 2;
+      const r2    = radius + bw + 4;
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(angle) * r1, cy + Math.sin(angle) * r1);
+      ctx.lineTo(cx + Math.cos(angle) * r2, cy + Math.sin(angle) * r2);
+      ctx.stroke();
+      // Ramificaciones
+      const midR = (r1 + r2) / 2;
+      for (const da of [-0.3, 0.3]) {
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(angle) * midR, cy + Math.sin(angle) * midR);
+        ctx.lineTo(cx + Math.cos(angle + da) * (midR + 5), cy + Math.sin(angle + da) * (midR + 5));
+        ctx.stroke();
+      }
+    }
+
+  } else if (style === 'galaxy') {
+    // Marco galaxia: gradiente morado-azul con estrellas
+    const galGrad = ctx.createLinearGradient(cx - radius, cy - radius, cx + radius, cy + radius);
+    galGrad.addColorStop(0,   '#0d0d2b');
+    galGrad.addColorStop(0.3, '#4a0080');
+    galGrad.addColorStop(0.6, '#3498db');
+    galGrad.addColorStop(1,   '#9b59b6');
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius + bw, 0, Math.PI * 2);
+    ctx.fillStyle = galGrad;
+    ctx.fill();
+    // Estrellas pequeñas en el marco
+    const rng = (s: number) => { const x = Math.sin(s) * 10000; return x - Math.floor(x); };
+    for (let i = 0; i < 20; i++) {
+      const angle = rng(i * 2.3) * Math.PI * 2;
+      const dist  = radius + 2 + rng(i * 4.7) * (bw - 2);
+      const sx    = cx + Math.cos(angle) * dist;
+      const sy    = cy + Math.sin(angle) * dist;
+      const size  = rng(i * 6.1) * 2 + 0.5;
+      ctx.fillStyle = `rgba(255,255,255,${0.4 + rng(i * 8.3) * 0.6})`;
+      ctx.beginPath();
+      ctx.arc(sx, sy, size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+  } else if (style === 'void') {
+    // Marco del vacío: negro profundo con destellos morados
+    const voidGrad = ctx.createRadialGradient(cx, cy, radius, cx, cy, radius + bw + 5);
+    voidGrad.addColorStop(0,   '#1a0030');
+    voidGrad.addColorStop(0.4, '#4a0080');
+    voidGrad.addColorStop(0.7, '#8e44ad');
+    voidGrad.addColorStop(1,   '#1a0030');
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius + bw, 0, Math.PI * 2);
+    ctx.fillStyle = voidGrad;
+    ctx.fill();
+    // Destellos de energía
+    const rng = (s: number) => { const x = Math.sin(s) * 10000; return x - Math.floor(x); };
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2 + rng(i * 3.3) * 0.4;
+      const r1    = radius + 1;
+      const r2    = radius + bw + 3 + rng(i * 7.1) * 6;
+      ctx.save();
+      ctx.shadowColor = '#8e44ad';
+      ctx.shadowBlur  = 8;
+      ctx.strokeStyle = rgba('#c39bd3', 0.5 + rng(i * 5.5) * 0.5);
+      ctx.lineWidth   = 1 + rng(i * 2.9) * 2;
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(angle) * r1, cy + Math.sin(angle) * r1);
+      ctx.lineTo(cx + Math.cos(angle) * r2, cy + Math.sin(angle) * r2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+  } else if (style === 'ornate') {
+    // Marco dragón/ornate: rojo oscuro con detalles dorados
+    const ornGrad = ctx.createLinearGradient(cx - radius, cy - radius, cx + radius, cy + radius);
+    ornGrad.addColorStop(0,   '#8b0000');
+    ornGrad.addColorStop(0.3, '#c0392b');
+    ornGrad.addColorStop(0.6, '#e74c3c');
+    ornGrad.addColorStop(1,   '#8b0000');
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius + bw, 0, Math.PI * 2);
+    ctx.fillStyle = ornGrad;
+    ctx.fill();
+    // Detalles dorados en las esquinas cardinales
+    for (let i = 0; i < 4; i++) {
+      const angle = (i / 4) * Math.PI * 2;
+      const ox    = cx + Math.cos(angle) * (radius + bw - 2);
+      const oy    = cy + Math.sin(angle) * (radius + bw - 2);
+      ctx.save();
+      ctx.shadowColor = '#ffd700';
+      ctx.shadowBlur  = 6;
+      ctx.fillStyle   = '#ffd700';
+      ctx.beginPath();
+      ctx.arc(ox, oy, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+    // Anillo dorado exterior
+    ctx.strokeStyle = rgba('#ffd700', 0.7);
+    ctx.lineWidth   = 1.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius + bw + 3, 0, Math.PI * 2);
+    ctx.stroke();
+
+  } else if (style === 'legendary') {
+    // Marco legendario: dorado con múltiples capas, gemas y detalles épicos
+    // Capa exterior oscura
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius + bw + 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#1a1000';
+    ctx.fill();
+
+    // Anillo exterior dorado
+    ctx.strokeStyle = rgba('#ffd700', 0.9);
+    ctx.lineWidth   = 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius + bw + 5, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Relleno principal con gradiente dorado épico
+    const legGrad = ctx.createLinearGradient(cx - radius, cy - radius, cx + radius, cy + radius);
+    legGrad.addColorStop(0,    '#ffd700');
+    legGrad.addColorStop(0.15, '#ffec6e');
+    legGrad.addColorStop(0.3,  '#b8860b');
+    legGrad.addColorStop(0.5,  '#ffd700');
+    legGrad.addColorStop(0.7,  '#ff8c00');
+    legGrad.addColorStop(0.85, '#ffec6e');
+    legGrad.addColorStop(1,    '#ffd700');
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius + bw, 0, Math.PI * 2);
+    ctx.fillStyle = legGrad;
+    ctx.fill();
+
+    // Gemas en las 8 posiciones cardinales/diagonales
+    for (let i = 0; i < 8; i++) {
+      const angle  = (i / 8) * Math.PI * 2;
+      const gemR   = radius + bw - 1;
+      const gx     = cx + Math.cos(angle) * gemR;
+      const gy     = cy + Math.sin(angle) * gemR;
+      const isCard = i % 2 === 0; // cardinales más grandes
+      const size   = isCard ? 5 : 3.5;
+      const color  = isCard ? '#ff4500' : '#ffffff';
+
+      ctx.save();
+      ctx.shadowColor = color;
+      ctx.shadowBlur  = 8;
+      ctx.fillStyle   = color;
+      ctx.beginPath();
+      ctx.arc(gx, gy, size, 0, Math.PI * 2);
+      ctx.fill();
+      // Brillo de la gema
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.beginPath();
+      ctx.arc(gx - size * 0.3, gy - size * 0.3, size * 0.35, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Líneas decorativas entre gemas
+    ctx.strokeStyle = rgba('#ffd700', 0.4);
+    ctx.lineWidth   = 1;
+    for (let i = 0; i < 8; i++) {
+      const a1 = (i / 8) * Math.PI * 2;
+      const a2 = ((i + 1) / 8) * Math.PI * 2;
+      const r1 = radius + bw - 5;
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(a1) * r1, cy + Math.sin(a1) * r1);
+      ctx.lineTo(cx + Math.cos(a2) * r1, cy + Math.sin(a2) * r1);
+      ctx.stroke();
+    }
+
+    // Anillo interior dorado
+    ctx.strokeStyle = rgba('#b8860b', 0.8);
+    ctx.lineWidth   = 1.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius + 3, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+
+  // ── Borde oscuro interior (siempre) ─────────────────────────────────────
+  ctx.save();
   ctx.beginPath();
-  ctx.arc(cx, cy, radius + borderWidth + 2, 0, Math.PI * 2);
-  ctx.fillStyle = 'transparent';
+  ctx.arc(cx, cy, radius + 2, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
   ctx.fill();
   ctx.restore();
 
-  // Borde de color
+  // ── Avatar ───────────────────────────────────────────────────────────────
   ctx.save();
-  ctx.beginPath();
-  ctx.arc(cx, cy, radius + borderWidth, 0, Math.PI * 2);
-  ctx.fillStyle = borderColor;
-  ctx.fill();
-
-  // Borde oscuro interior
-  ctx.beginPath();
-  ctx.arc(cx, cy, radius + 2, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(0,0,0,0.5)';
-  ctx.fill();
-
-  // Avatar
   ctx.beginPath();
   ctx.arc(cx, cy, radius, 0, Math.PI * 2);
   ctx.clip();
@@ -190,7 +471,12 @@ export async function generateProfileCard(opts: ProfileCardOptions): Promise<Buf
   const W = 960, H = 340;
   const canvas = createCanvas(W, H);
   const ctx    = canvas.getContext('2d');
-  const accent = opts.accentColor;
+
+  // Color: usa el equipado si existe, si no el del rol
+  const accent = opts.equippedColor
+    ? (getColorHex(opts.equippedColor) ?? opts.accentColor)
+    : opts.accentColor;
+
   const { r, g, b } = hexToRgb(accent);
 
   // ── Fondo ────────────────────────────────────────────────────────────────
@@ -223,7 +509,7 @@ export async function generateProfileCard(opts: ProfileCardOptions): Promise<Buf
   // Avatar centrado en el panel
   const avatarCX = panelW / 2 + 2;
   const avatarCY = 130;
-  await drawCircularAvatar(ctx, opts.avatarUrl, avatarCX, avatarCY, 78, accent, 5);
+  await drawCircularAvatar(ctx, opts.avatarUrl, avatarCX, avatarCY, 78, accent, 5, opts.equippedFrame);
 
   // Badge de nivel (esquina inferior derecha del avatar)
   const badgeR = 20;
@@ -245,6 +531,16 @@ export async function generateProfileCard(opts: ProfileCardOptions): Promise<Buf
   ctx.font      = 'bold 16px sans-serif';
   ctx.textAlign = 'center';
   ctx.fillText(opts.username, avatarCX, avatarCY + 105, panelW - 24);
+
+  // Título equipado (si tiene)
+  if (opts.equippedTitle) {
+    const titleData = getTitleData(opts.equippedTitle);
+    if (titleData) {
+      ctx.fillStyle = titleData.color ?? accent;
+      ctx.font      = 'bold 11px sans-serif';
+      ctx.fillText(titleData.label, avatarCX, avatarCY + 120, panelW - 24);
+    }
+  }
 
   // Rank badge
   const rankBadgeW = 90, rankBadgeH = 24;

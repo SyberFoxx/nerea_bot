@@ -1,6 +1,8 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction, AttachmentBuilder } from 'discord.js';
 import { SlashComando } from '../../types';
 import { generateProfileCard } from '../../canvas/imageUtils';
+import { getEquipped } from '../../sistemas/cosmetics';
+import { getColorHex } from '../../canvas/frameStyles';
 
 const xpSystem = require('../../sistemas/xpSystem');
 
@@ -55,14 +57,33 @@ const comando: SlashComando = {
 
     const accentColor = getAccentColor(member);
 
+    // ── Cosméticos equipados ───────────────────────────────────────────────
+    let equippedFrame: string | null = null;
+    let equippedTitle: string | null = null;
+    let equippedColor: string | null = null;
+    try {
+      const cosmetics = await getEquipped(target.id, interaction.guild!.id);
+      equippedFrame = cosmetics.equipped_frame;
+      equippedTitle = cosmetics.equipped_title;
+      equippedColor = cosmetics.equipped_color;
+    } catch { /* usar defaults */ }
+
+    // Si tiene color equipado, usarlo como accentColor
+    const finalAccent = equippedColor
+      ? (getColorHex(equippedColor) ?? accentColor)
+      : accentColor;
+
     try {
       const buffer = await generateProfileCard({
         username:    target.username,
         avatarUrl:   target.displayAvatarURL({ size: 256, extension: 'png', forceStatic: true }),
         level, xp, xpNeeded, rank,
-        accentColor,
-        joinedAt: fechaUnion,
+        accentColor:    finalAccent,
+        joinedAt:       fechaUnion,
         roles,
+        equippedFrame,
+        equippedTitle,
+        equippedColor,
       });
 
       const attachment = new AttachmentBuilder(buffer, { name: 'perfil.png' });
