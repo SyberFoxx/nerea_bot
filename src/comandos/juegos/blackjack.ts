@@ -1,4 +1,3 @@
-import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { Comando } from '../../types';
 import { BlackjackGame } from '../../sistemas/blackjack/gameLogic';
 import { dbRun } from '../../sistemas/blackjack/db';
@@ -6,78 +5,161 @@ import { dbRun } from '../../sistemas/blackjack/db';
 const comando: Comando = {
   nombre: 'blackjack',
   alias: ['bj', 'veintiuno'],
-  descripcion: 'Juega una partida de Blackjack',
+  descripcion: 'Juega una partida de Blackjack con apuestas, doble y rendición',
+  uso: '!blackjack crear | !blackjack unirse [id] | !blackjack apostar [id] [cantidad] | !blackjack iniciar [id]',
   categoria: 'juegos',
   ejecutar: async (message, args) => {
     const sub = args[0]?.toLowerCase();
     const userId = message.author.id;
-    const channelId = message.channel.id;
-    const gameId = args[1];
     const ch = message.channel as any;
 
-    if (!sub) return ch.send('❌ Uso: `!blackjack crear` | `!blackjack unirse [id]` | `!blackjack iniciar [id]` | `!blackjack apostar [id] [cantidad]`');
+    if (!sub) {
+      return ch.send(
+        '🎰 **Blackjack** — Comandos disponibles:\n' +
+        '`!blackjack solo` — **Juega solo contra un bot** ⭐\n' +
+        '`!blackjack crear` — Crea una nueva partida\n' +
+        '`!blackjack unirse [id]` — Únete a una partida\n' +
+        '`!blackjack apostar [id] [cantidad]` — Establece tu apuesta\n' +
+        '`!blackjack iniciar [id]` — Inicia la partida\n\n' +
+        '*Una vez iniciada, usa los botones para Pedir carta, Plantarse, Doblar o Rendirte.*'
+      );
+    }
 
     try {
       switch (sub) {
-        case 'crear': {
-          const id = await BlackjackGame.createGame(channelId, userId);
-          const embed = new EmbedBuilder().setColor('#0099ff').setTitle('🎰 Nueva Partida de Blackjack')
-            .addFields(
-              { name: 'ID', value: `\`${id}\`` },
-              { name: 'Creador', value: `<@${userId}>` },
-              { name: 'Estado', value: '🔄 Esperando jugadores...' },
-              { name: 'Unirse', value: `\`!blackjack unirse ${id}\`` }
-            ).setTimestamp();
-          const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId(`blackjack_join_${id}`).setLabel('Unirse').setStyle(ButtonStyle.Primary)
-          );
-          const msg = await ch.send({ content: `🎰 <@${userId}> creó una partida de Blackjack.`, embeds: [embed], components: [row] });
-          await dbRun('UPDATE games SET message_id = ? WHERE game_id = ?', [msg.id, id]);
-          break;
-        }
-        case 'unirse': {
-          if (!gameId) return ch.send('❌ Especifica el ID. Ej: `!blackjack unirse 12345`');
-          const game = await BlackjackGame.getGame(gameId);
-          const players = await BlackjackGame.getPlayers(gameId);
-          if (players.some((p: any) => p.user_id === userId))
-            return ch.send(`ℹ️ Ya estás en esta partida. Usa \`!blackjack iniciar ${gameId}\` para comenzar.`);
-          await BlackjackGame.addPlayer(gameId, userId);
-          const updated = await BlackjackGame.getPlayers(gameId);
-          if (updated.length === 1) { await BlackjackGame.addPlayer(gameId, 'bot-1', true); await ch.send('🤖 Se unió un bot.'); }
-          await ch.send(`✅ <@${userId}> se unió (${updated.length}/4 jugadores)`);
-          break;
-        }
-        case 'iniciar': {
-          if (!gameId) return ch.send('❌ Especifica el ID. Ej: `!blackjack iniciar 12345`');
-          const game = await BlackjackGame.getGame(gameId);
-          if (!game) return ch.send('❌ Partida no encontrada.');
-          const players = await BlackjackGame.getPlayers(gameId);
-          if (!players.find((p: any) => p.user_id === userId)) return ch.send('❌ Debes estar en la partida para iniciarla.');
+
+        // ── Solo (vs bot) ──────────────────────────────────────────────────
+        case 'solo': {
+          const gameId = await BlackjackGame.createGame(message.channel.id, userId);
+          await dbRun('UPDATE players SET username = ? WHERE user_id = ? AND game_id = ?', [message.author.username, userId, gameId]);
+
+          // Iniciar directamente (startGame añade el bot automáticamente)
           await BlackjackGame.startGame(gameId);
-          const updatedGame = await BlackjackGame.getGame(gameId);
-          const updatedPlayers = await BlackjackGame.getPlayers(gameId);
-          const embed = BlackjackGame.createGameEmbed(updatedGame, updatedPlayers, userId);
-          const row = BlackjackGame.createGameButtons(updatedGame, userId);
-          await ch.send({ content: `🎰 **¡La partida comenzó!** Turno de <@${userId}>`, embeds: [embed], components: [row] });
+
+          const game    = await BlackjackGame.getGame(gameId);
+          const players = await BlackjackGame.getPlayers(gameId);
+          const current = players.find(p => p.status === 'playing' && !p.is_bot);
+
+          const embed = BlackjackGame.buildEmbed(game!, players);
+          embed.setDescription('🎰 **Tú vs 🤖 BOT**\n\nUsa los botones para jugar.');
+          const rows = BlackjackGame.buildButtons(game!, players, current?.user_id);
+
+          const msg = await ch.send({
+            content: current ? `🎲 **¡La partida comenzó!** Es tu turno <@${userId}>` : '🎲 **¡La partida comenzó!**',
+            embeds: [embed],
+            components: rows,
+          });
+          await dbRun('UPDATE games SET message_id = ? WHERE game_id = ?', [msg.id, gameId]);
           break;
         }
+
+        // ── Crear partida ──────────────────────────────────────────────────
+        case 'crear': {
+          const username = message.author.username;
+          const gameId = await BlackjackGame.createGame(message.channel.id, userId);
+
+          // Guardar username del creador
+          await dbRun('UPDATE players SET username = ? WHERE user_id = ? AND game_id = ?', [username, userId, gameId]);
+
+          const game = await BlackjackGame.getGame(gameId);
+          const players = await BlackjackGame.getPlayers(gameId);
+          const embed = BlackjackGame.buildEmbed(game!, players);
+          embed.setDescription(`🎰 **¡Nueva partida creada por ${message.author}!**\n\nApuesta mínima: **$100**\nUsa los botones para unirte y apostar antes de iniciar.`);
+
+          const rows = BlackjackGame.buildButtons(game!, players);
+          const msg = await ch.send({ embeds: [embed], components: rows });
+          await dbRun('UPDATE games SET message_id = ? WHERE game_id = ?', [msg.id, gameId]);
+          break;
+        }
+
+        // ── Unirse ─────────────────────────────────────────────────────────
+        case 'unirse': {
+          const gameId = args[1];
+          if (!gameId) return ch.send('❌ Especifica el ID. Ej: `!blackjack unirse bj_123456`');
+
+          const existing = await BlackjackGame.getPlayer(gameId, userId);
+          if (existing) return ch.send('ℹ️ Ya estás en esta partida.');
+
+          await BlackjackGame.addPlayer(gameId, userId, false, message.author.username);
+          const game = await BlackjackGame.getGame(gameId);
+          const players = await BlackjackGame.getPlayers(gameId);
+
+          // Actualizar mensaje original si existe
+          if (game?.message_id) {
+            try {
+              const original = await ch.messages.fetch(game.message_id);
+              const embed = BlackjackGame.buildEmbed(game, players);
+              embed.setDescription(`🎰 **Partida de Blackjack**\n\n${players.filter((p: any) => !p.is_bot).map((p: any) => `👤 ${p.username} — Apuesta: $${p.current_bet}`).join('\n')}`);
+              await original.edit({ embeds: [embed], components: BlackjackGame.buildButtons(game, players) });
+            } catch { /* mensaje ya no existe */ }
+          }
+
+          await ch.send(`✅ **${message.author.username}** se unió a la partida \`${gameId}\` (${players.filter((p: any) => !p.is_bot).length}/4 jugadores)`);
+          break;
+        }
+
+        // ── Apostar ────────────────────────────────────────────────────────
         case 'apostar': {
+          const gameId = args[1];
           const amount = parseInt(args[2]);
           if (!gameId || isNaN(amount)) return ch.send('❌ Uso: `!blackjack apostar [id] [cantidad]`');
-          const player = await BlackjackGame.getPlayer(gameId, userId);
-          if (!player) return ch.send('❌ No estás en esta partida.');
-          if (player.balance < amount) return ch.send('❌ Saldo insuficiente.');
-          if (amount <= 0) return ch.send('❌ La apuesta debe ser mayor a 0.');
-          await dbRun('UPDATE players SET current_bet = ? WHERE user_id = ? AND game_id = ?', [amount, userId, gameId]);
-          await ch.send(`✅ <@${userId}> apostó $${amount}.`);
+
+          await BlackjackGame.placeBet(gameId, userId, amount);
+
+          const game = await BlackjackGame.getGame(gameId);
+          const players = await BlackjackGame.getPlayers(gameId);
+
+          if (game?.message_id) {
+            try {
+              const original = await ch.messages.fetch(game.message_id);
+              const embed = BlackjackGame.buildEmbed(game, players);
+              embed.setDescription(`🎰 **Partida de Blackjack**\n\n${players.filter((p: any) => !p.is_bot).map((p: any) => `👤 ${p.username} — Apuesta: **$${p.current_bet}**`).join('\n')}`);
+              await original.edit({ embeds: [embed], components: BlackjackGame.buildButtons(game, players) });
+            } catch { /* ignorar */ }
+          }
+
+          await ch.send(`💰 **${message.author.username}** apostó **$${amount}** en la partida \`${gameId}\``);
           break;
         }
+
+        // ── Iniciar ────────────────────────────────────────────────────────
+        case 'iniciar': {
+          const gameId = args[1];
+          if (!gameId) return ch.send('❌ Especifica el ID. Ej: `!blackjack iniciar bj_123456`');
+
+          const gameCheck = await BlackjackGame.getGame(gameId);
+          if (!gameCheck) return ch.send('❌ Partida no encontrada.');
+          if (gameCheck.creator_id !== userId) return ch.send('❌ Solo el creador puede iniciar la partida.');
+
+          const playersCheck = await BlackjackGame.getPlayers(gameId);
+          if (!playersCheck.find((p: any) => p.user_id === userId)) return ch.send('❌ Debes estar en la partida.');
+
+          await BlackjackGame.startGame(gameId);
+
+          const game = await BlackjackGame.getGame(gameId);
+          const players = await BlackjackGame.getPlayers(gameId);
+          const currentPlayer = players.find((p: any) => p.status === 'playing' && !p.is_bot);
+
+          const embed = BlackjackGame.buildEmbed(game!, players);
+          const rows = BlackjackGame.buildButtons(game!, players, currentPlayer?.user_id);
+
+          const msg = await ch.send({
+            content: currentPlayer ? `🎲 **¡La partida comenzó!** Turno de <@${currentPlayer.user_id}>` : '🎲 **¡La partida comenzó!**',
+            embeds: [embed],
+            components: rows,
+          });
+
+          // Actualizar message_id al mensaje de juego activo
+          await dbRun('UPDATE games SET message_id = ? WHERE game_id = ?', [msg.id, gameId]);
+          break;
+        }
+
         default:
-          await ch.send('❌ Subcomando no reconocido.');
+          ch.send('❌ Subcomando no reconocido. Usa `!blackjack` para ver los comandos disponibles.');
       }
     } catch (error: any) {
       console.error('Error en blackjack:', error);
-      await ch.send(`❌ Error: ${error.message}`);
+      ch.send(`❌ ${error.message}`);
     }
   },
 };

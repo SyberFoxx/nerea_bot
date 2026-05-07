@@ -26,32 +26,32 @@ const client = new Client({
   partials: ['MESSAGE' as any, 'CHANNEL' as any, 'REACTION' as any],
 });
 
-// Prefijo
+// Prefijo para comandos legacy (!)
 const prefix = process.env.PREFIX ?? '!';
 
-// Cargar comandos desde src
+// ── Cargar comandos de prefijo ─────────────────────────────────────────────
 const { getCommand, getCommandsByCategory } = require('./index');
-
 const categorias = getCommandsByCategory();
 console.log('\n📂 Categorías de comandos cargadas:');
 Object.keys(categorias).forEach((cat: string) => {
   console.log(`  - ${cat}: ${categorias[cat].length} comandos`);
 });
 
-// Registrar actividad
-const { registrarActividad } = require('./comandos/estadisticasServidor/_actividadTracking');
+// ── Cargar slash commands ──────────────────────────────────────────────────
+const { slashCommands } = require('./slash/index');
 
-// Sistema XP
-const { setupXPEvents } = require('./comandos/utilidades/nivel');
+// ── Registrar actividad y XP ───────────────────────────────────────────────
+const { registrarActividad } = require('./comandos/estadisticasServidor/_actividadTracking');
+const { setupXPEvents }      = require('./comandos/utilidades/nivel');
 setupXPEvents(client);
 
-// Manejador de mensajes
+// ── Manejador de comandos con prefijo (!) ──────────────────────────────────
 async function manejarComando(message: Message): Promise<void> {
   if (!message.content.startsWith(prefix) || message.author.bot) return;
 
-  const args = message.content.slice(prefix.length).trim().split(/ +/);
+  const args         = message.content.slice(prefix.length).trim().split(/ +/);
   const nombreComando = args.shift()!.toLowerCase();
-  const comando = getCommand(nombreComando);
+  const comando       = getCommand(nombreComando);
   if (!comando) return;
 
   try {
@@ -74,9 +74,10 @@ client.on('messageCreate', manejarComando);
 // Evento ready
 client.once('ready', () => {
   console.log(`✅ ${client.user!.tag} está en línea!`);
-  console.log(`📊 Comandos: ${Object.values(categorias).reduce((a: number, c: any) => a + c.length, 0)}`);
+  console.log(`📊 Comandos (!): ${Object.values(categorias).reduce((a: number, c: any) => a + c.length, 0)}`);
+  console.log(`⚡ Slash commands: ${slashCommands.size}`);
   console.log(`🔄 Prefijo: ${prefix}`);
-  client.user!.setActivity(`Usa ${prefix}ayuda para ver comandos`);
+  client.user!.setActivity(`/ayuda | ${prefix}ayuda`);
   registrarActividad(client.user!.id);
 });
 

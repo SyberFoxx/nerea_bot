@@ -45,9 +45,18 @@ async function initializeDatabase(): Promise<void> {
     game_id TEXT PRIMARY KEY, channel_id TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'waiting', current_player_index INTEGER DEFAULT 0,
     deck TEXT, dealer_hand TEXT, current_bet INTEGER DEFAULT 0,
-    message_id TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    message_id TEXT, creator_id TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
-  try { await dbRun('ALTER TABLE games ADD COLUMN message_id TEXT'); } catch { /* ya existe */ }
+
+  // Migraciones — agregar columnas si no existen (base de datos antigua)
+  const migrations = [
+    'ALTER TABLE games ADD COLUMN message_id TEXT',
+    'ALTER TABLE games ADD COLUMN creator_id TEXT',
+    'ALTER TABLE games ADD COLUMN current_player_index INTEGER DEFAULT 0',
+  ];
+  for (const sql of migrations) {
+    try { await dbRun(sql); } catch { /* columna ya existe */ }
+  }
 
   await dbRun(`CREATE TABLE IF NOT EXISTS players (
     user_id TEXT NOT NULL, game_id TEXT NOT NULL, username TEXT,
