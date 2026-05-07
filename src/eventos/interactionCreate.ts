@@ -39,7 +39,7 @@ module.exports = {
       return;
     }
 
-    if (!interaction.isButton()) return;
+    if (!interaction.isButton() && !interaction.isStringSelectMenu()) return;
     const { customId } = interaction;
     if (customId.startsWith('bj_'))                                    { await handleBlackjack(interaction); return; }
     if (customId.startsWith('dom_') || customId.startsWith('domino_')) { await handleDomino(interaction);    return; }
@@ -198,17 +198,49 @@ async function handleBlackjack(interaction: any): Promise<void> {
 // ═══════════════════════════════════════════════════════════════════════════════
 //  DOMINÓ
 // ═══════════════════════════════════════════════════════════════════════════════
+//  DOMINÓ
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Helper: construye embed + componentes actualizados para el estado actual */
+async function buildDominoReply(gameId: string, viewerUserId: string, extraMsg?: string) {
+  const game    = await DominoGame.getGame(gameId);
+  const players = await DominoGame.getPlayers(gameId);
+  const current = await DominoGame.getCurrentPlayer(gameId);
+  const viewer  = players.find(p => p.user_id === viewerUserId);
+  const isMyTurn = current?.user_id === viewerUserId;
+  const canPass  = isMyTurn ? !(await DominoGame.canCurrentPlayerPlay(gameId)) : false;
+
+  const playableTiles = isMyTurn && viewer
+    ? DominoDisplay.getPlayableTiles(viewer.tiles, game!.left_end, game!.right_end)
+    : [];
+
+  const embed      = DominoDisplay.buildGameEmbed(game!, players, viewerUserId, extraMsg);
+  const components = game!.status === 'finished'
+    ? []
+    : DominoDisplay.buildGameComponents(gameId, isMyTurn, canPass, playableTiles);
+
+  const content = game!.status === 'finished'
+    ? '🏁 **¡Partida terminada!**'
+    : current?.is_bot
+      ? `🤖 **${current.username}** está pensando...`
+      : isMyTurn
+        ? `🎴 **¡Es tu turno!** <@${viewerUserId}>`
+        : `🎴 Turno de <@${current?.user_id}>`;
+
+  return { embed, components, content };
+}
 
 async function handleDomino(interaction: any): Promise<void> {
   const { customId, user } = interaction;
 
-  // Normalizar prefijo (dom_ o domino_)
+  // Normalizar prefijo legacy
   const normalized = customId.replace(/^domino_/, 'dom_');
   const parts  = normalized.split('_');
   const action = parts[1];
   const gameId = parts.slice(2).join('_');
 
-  if (['start', 'play', 'pass'].includes(action)) {
+  // Anti-spam para acciones que modifican estado
+  if (['start', 'pass', 'select'].includes(action)) {
     if (processing.has(`dom_${gameId}`))
       return interaction.reply({ content: '⏳ Espera a que termine la acción anterior.', ephemeral: true });
     processing.add(`dom_${gameId}`);
@@ -240,23 +272,16 @@ async function handleDomino(interaction: any): Promise<void> {
     if (action === 'start') {
       const game = await DominoGame.getGame(gameId);
       if (!game) return interaction.reply({ content: '❌ Partida no encontrada.', ephemeral: true });
-      if (game.creator_id !== user.id) return interaction.reply({ content: '❌ Solo el creador puede iniciar.', ephemeral: true });
+      if (game.creator_id !== user.id)
+        return interaction.reply({ content: '❌ Solo el creador puede iniciar.', ephemeral: true });
 
       await interaction.deferUpdate();
       await DominoGame.startGame(gameId);
 
-      const ug      = await DominoGame.getGame(gameId);
-      const up      = await DominoGame.getPlayers(gameId);
+      const { embed, components, content } = await buildDominoReply(gameId, user.id);
+      await interaction.editReply({ content, embeds: [embed], components });
+
       const current = await DominoGame.getCurrentPlayer(gameId);
-      const canPass = !(await DominoGame.canCurrentPlayerPlay(gameId));
-      const embed   = DominoDisplay.buildGameEmbed(ug!, up, user.id);
-      const row     = DominoDisplay.buildGameButtons(gameId, current?.user_id === user.id, canPass);
-
-      await interaction.editReply({
-        content: current?.is_bot ? `🤖 **${current.username}** empieza.` : `🎴 **¡La partida comenzó!** Turno de <@${current?.user_id}>`,
-        embeds: [embed], components: [row],
-      });
-
       if (current?.is_bot) {
         await new Promise(r => setTimeout(r, 1500));
         await playDominoBotChain(gameId, current.user_id, interaction, user.id);
@@ -264,41 +289,129 @@ async function handleDomino(interaction: any): Promise<void> {
       return;
     }
 
-    // ── Ver fichas ────────────────────────────────────────────────────────
+    // ── Ver fichas (ephemeral) ────────────────────────────────────────────
     if (action === 'hand') {
       const game   = await DominoGame.getGame(gameId);
       const player = await DominoGame.getPlayer(gameId, user.id);
       if (!player) return interaction.reply({ content: '❌ No estás en esta partida.', ephemeral: true });
+
       const handText = DominoDisplay.formatHand(player.tiles, game?.left_end ?? -1, game?.right_end ?? -1);
+      const current  = await DominoGame.getCurrentPlayer(gameId);
+      const isMyTurn = current?.user_id === user.id;
+
       return interaction.reply({
-        content: `🃏 **Tus fichas (${player.tiles.length}):**\n${handText}\n\n✅ = jugable  ❌ = no jugable\n\nUsa: \`!domino jugar ${gameId} [nº] [izquierda|derecha]\``,
+        embeds: [{
+          title: `🃏 Tus fichas (${player.tiles.length})`,
+          description: handText || '*Sin fichas*',
+          color: isMyTurn ? 0x2ecc71 : 0x95a5a6,
+          fields: [
+            { name: '✅ Jugable', value: '← → indica el lado válido', inline: true },
+            { name: '↔ Ambos lados', value: 'Puedes elegir al jugar', inline: true },
+          ],
+          footer: { text: isMyTurn ? '¡Es tu turno! Usa el menú desplegable para jugar.' : 'Espera tu turno.' },
+        }],
         ephemeral: true,
       });
     }
 
-    // ── Jugar ficha ───────────────────────────────────────────────────────
-    if (action === 'play') {
+    // ── Selección de ficha (select menu) ──────────────────────────────────
+    if (action === 'select' && parts[2] === 'tile') {
+      if (!interaction.isStringSelectMenu()) return;
+
       const game = await DominoGame.getGame(gameId);
       if (!game || game.status !== 'in_progress')
         return interaction.reply({ content: '❌ La partida no está en progreso.', ephemeral: true });
+
       const current = await DominoGame.getCurrentPlayer(gameId);
       if (current?.user_id !== user.id)
         return interaction.reply({ content: '❌ No es tu turno.', ephemeral: true });
-      const player = await DominoGame.getPlayer(gameId, user.id);
+
+      const [indexStr, preferredSide] = interaction.values[0].split(':');
+      const tileIndex = parseInt(indexStr);
+      const player    = await DominoGame.getPlayer(gameId, user.id);
       if (!player) return interaction.reply({ content: '❌ No estás en esta partida.', ephemeral: true });
 
-      const playable = player.tiles
-        .map((t, i) => ({ t, i }))
-        .filter(({ t }) => DominoGame.canPlay(t, game.left_end, game.right_end));
+      const tile  = player.tiles[tileIndex];
+      const sides = DominoGame.getValidSides(tile, game.left_end, game.right_end);
 
-      if (playable.length === 0)
-        return interaction.reply({ content: '❌ No tienes fichas jugables. Usa el botón **Pasar**.', ephemeral: true });
+      // Si la ficha puede ir en ambos lados → mostrar segundo select para elegir lado
+      if (sides.length === 2) {
+        await interaction.reply({
+          content: `🎴 Elegiste \`${DominoDisplay.tileText(tile)}\` — ¿En qué extremo la colocas?`,
+          components: [DominoDisplay.buildSideSelectMenu(gameId, tileIndex, tile, game.left_end, game.right_end)],
+          ephemeral: true,
+        });
+        return;
+      }
 
-      const list = playable.map(({ t, i }) => `**${i + 1}.** \`[${t.left}|${t.right}]\``).join('\n');
-      return interaction.reply({
-        content: `🎴 **Elige qué ficha jugar:**\n${list}\n\nUsa: \`!domino jugar ${gameId} [número] [izquierda|derecha]\``,
-        ephemeral: true,
-      });
+      // Solo un lado válido → jugar directamente
+      await interaction.deferUpdate();
+      const side = sides[0];
+      const { game: ug, winner } = await DominoGame.playTile(gameId, user.id, tileIndex, side);
+      const up = await DominoGame.getPlayers(gameId);
+
+      if (winner) {
+        const embed = DominoDisplay.buildGameEmbed(ug, up, user.id,
+          `🏆 **¡${winner.is_bot ? winner.username : `<@${winner.user_id}>`} ganó la partida!**`);
+        await interaction.editReply({ content: '🏁 **¡Partida terminada!**', embeds: [embed], components: [] });
+        return;
+      }
+
+      const { embed, components, content } = await buildDominoReply(gameId, user.id,
+        `✅ <@${user.id}> jugó \`${DominoDisplay.tileText(tile)}\` al ${side === 'left' ? 'lado izquierdo ←' : 'lado derecho →'}`);
+      await interaction.editReply({ content, embeds: [embed], components });
+
+      const next = await DominoGame.getCurrentPlayer(gameId);
+      if (next?.is_bot) {
+        await new Promise(r => setTimeout(r, 1500));
+        await playDominoBotChain(gameId, next.user_id, interaction, user.id);
+      }
+      return;
+    }
+
+    // ── Selección de lado (segundo select menu) ───────────────────────────
+    if (action === 'select' && parts[2] === 'side') {
+      if (!interaction.isStringSelectMenu()) return;
+
+      const game = await DominoGame.getGame(gameId);
+      if (!game || game.status !== 'in_progress')
+        return interaction.reply({ content: '❌ La partida no está en progreso.', ephemeral: true });
+
+      const current = await DominoGame.getCurrentPlayer(gameId);
+      if (current?.user_id !== user.id)
+        return interaction.reply({ content: '❌ No es tu turno.', ephemeral: true });
+
+      const [indexStr, side] = interaction.values[0].split(':') as [string, 'left'|'right'];
+      const tileIndex = parseInt(indexStr);
+      const player    = await DominoGame.getPlayer(gameId, user.id);
+      if (!player) return interaction.reply({ content: '❌ No estás en esta partida.', ephemeral: true });
+
+      const tile = player.tiles[tileIndex];
+
+      // Actualizar el mensaje ephemeral del select de lado
+      await interaction.update({ content: `⏳ Jugando \`${DominoDisplay.tileText(tile)}\`...`, components: [] });
+
+      const { game: ug, winner } = await DominoGame.playTile(gameId, user.id, tileIndex, side);
+      const up = await DominoGame.getPlayers(gameId);
+
+      // Actualizar el mensaje principal del juego
+      if (winner) {
+        const embed = DominoDisplay.buildGameEmbed(ug, up, user.id,
+          `🏆 **¡${winner.is_bot ? winner.username : `<@${winner.user_id}>`} ganó la partida!**`);
+        await interaction.followUp({ content: '🏁 **¡Partida terminada!**', embeds: [embed], components: [] });
+        return;
+      }
+
+      const { embed, components, content } = await buildDominoReply(gameId, user.id,
+        `✅ <@${user.id}> jugó \`${DominoDisplay.tileText(tile)}\` al ${side === 'left' ? 'lado izquierdo ←' : 'lado derecho →'}`);
+      await interaction.followUp({ content, embeds: [embed], components });
+
+      const next = await DominoGame.getCurrentPlayer(gameId);
+      if (next?.is_bot) {
+        await new Promise(r => setTimeout(r, 1500));
+        await playDominoBotChain(gameId, next.user_id, interaction, user.id);
+      }
+      return;
     }
 
     // ── Pasar turno ───────────────────────────────────────────────────────
@@ -317,23 +430,20 @@ async function handleDomino(interaction: any): Promise<void> {
 
       if (blocked) {
         const { winner, scores } = await DominoGame.getWinnerByPoints(gameId);
-        const scoreText = scores.map(s => `${s.player.is_bot ? s.player.username : `<@${s.player.user_id}>`}: **${s.points}** pts`).join('\n');
+        const scoreText = scores.map(s =>
+          `${s.player.is_bot ? s.player.username : `<@${s.player.user_id}>`}: **${s.points}** pts`
+        ).join('\n');
         const embed = DominoDisplay.buildGameEmbed(ug!, up, user.id,
           `🔒 **¡Juego bloqueado!**\n🏆 Gana **${winner.is_bot ? winner.username : `<@${winner.user_id}>`}**\n\n${scoreText}`);
         await interaction.editReply({ content: '🔒 **¡Juego bloqueado!**', embeds: [embed], components: [] });
         return;
       }
 
-      const next    = await DominoGame.getCurrentPlayer(gameId);
-      const canPass = !(await DominoGame.canCurrentPlayerPlay(gameId));
-      const embed   = DominoDisplay.buildGameEmbed(ug!, up, user.id, `⏭️ <@${user.id}> pasó su turno.`);
-      const row     = DominoDisplay.buildGameButtons(gameId, next?.user_id === user.id, canPass);
+      const { embed, components, content } = await buildDominoReply(gameId, user.id,
+        `⏭️ <@${user.id}> pasó su turno.`);
+      await interaction.editReply({ content, embeds: [embed], components });
 
-      await interaction.editReply({
-        content: next?.is_bot ? `🤖 **${next.username}** está pensando...` : `🎴 Turno de <@${next?.user_id}>`,
-        embeds: [embed], components: [row],
-      });
-
+      const next = await DominoGame.getCurrentPlayer(gameId);
       if (next?.is_bot) {
         await new Promise(r => setTimeout(r, 1500));
         await playDominoBotChain(gameId, next.user_id, interaction, user.id);
@@ -376,19 +486,12 @@ async function playDominoBotChain(gameId: string, _botId: string, interaction: a
 
       const actionText = result.action === 'pass'
         ? `🤖 **${current.username}** no pudo jugar y pasó.`
-        : `🤖 **${current.username}** jugó \`[${result.tile!.left}|${result.tile!.right}]\``;
+        : `🤖 **${current.username}** jugó \`${DominoDisplay.tileText(result.tile!)}\``;
 
-      const next    = await DominoGame.getCurrentPlayer(gameId);
-      const canPass = !(await DominoGame.canCurrentPlayerPlay(gameId));
-      const embed   = DominoDisplay.buildGameEmbed(ug!, up, viewerUserId, actionText);
-      const row     = DominoDisplay.buildGameButtons(gameId, next?.user_id === viewerUserId, canPass);
+      const { embed, components, content } = await buildDominoReply(gameId, viewerUserId, actionText);
+      await interaction.editReply({ content, embeds: [embed], components });
 
-      await interaction.editReply({
-        content: next?.is_bot ? `🤖 **${next.username}** está pensando...` : `🎴 Turno de <@${next?.user_id}>`,
-        embeds: [embed], components: [row],
-      });
-
-      if (!next?.is_bot) break;
+      if (!( await DominoGame.getCurrentPlayer(gameId))?.is_bot) break;
       await new Promise(r => setTimeout(r, 1200));
     }
   } catch (error) {

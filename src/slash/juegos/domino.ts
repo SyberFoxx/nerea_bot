@@ -2,7 +2,34 @@ import { SlashCommandBuilder, ChatInputCommandInteraction } from 'discord.js';
 import { SlashComando } from '../../types';
 import { DominoGame } from '../../sistemas/domino/gameLogic';
 import { DominoDisplay } from '../../sistemas/domino/dominoUtils';
-import { dbRun } from '../../sistemas/domino/db';
+
+// Helper reutilizable
+async function buildReply(gameId: string, viewerUserId: string, extraMsg?: string) {
+  const game    = await DominoGame.getGame(gameId);
+  const players = await DominoGame.getPlayers(gameId);
+  const current = await DominoGame.getCurrentPlayer(gameId);
+  const viewer  = players.find(p => p.user_id === viewerUserId);
+  const isMyTurn = current?.user_id === viewerUserId;
+  const canPass  = isMyTurn ? !(await DominoGame.canCurrentPlayerPlay(gameId)) : false;
+  const playable = isMyTurn && viewer
+    ? DominoDisplay.getPlayableTiles(viewer.tiles, game!.left_end, game!.right_end)
+    : [];
+
+  const embed      = DominoDisplay.buildGameEmbed(game!, players, viewerUserId, extraMsg);
+  const components = game!.status === 'finished'
+    ? []
+    : DominoDisplay.buildGameComponents(gameId, isMyTurn, canPass, playable);
+
+  const content = game!.status === 'finished'
+    ? '🏁 **¡Partida terminada!**'
+    : current?.is_bot
+      ? `🤖 **${current.username}** está pensando...`
+      : isMyTurn
+        ? `🎴 **¡Es tu turno!** <@${viewerUserId}>`
+        : `🎴 Turno de <@${current?.user_id}>`;
+
+  return { embed, components, content };
+}
 
 const comando: SlashComando = {
   data: new SlashCommandBuilder()
@@ -18,15 +45,15 @@ const comando: SlashComando = {
     )
     .addSubcommand(sub => sub.setName('jugar').setDescription('Juega una ficha')
       .addStringOption(opt => opt.setName('id').setDescription('ID de la partida').setRequired(true))
-      .addIntegerOption(opt => opt.setName('ficha').setDescription('Número de ficha (ver con /domino fichas)').setRequired(true).setMinValue(1))
+      .addIntegerOption(opt => opt.setName('ficha').setDescription('Número de ficha').setRequired(true).setMinValue(1))
       .addStringOption(opt => opt.setName('lado').setDescription('Lado del tablero').setRequired(false)
-        .addChoices({ name: 'Derecha', value: 'right' }, { name: 'Izquierda', value: 'left' })
+        .addChoices({ name: 'Derecha →', value: 'right' }, { name: 'Izquierda ←', value: 'left' })
       )
     )
     .addSubcommand(sub => sub.setName('pasar').setDescription('Pasa tu turno (si no puedes jugar)')
       .addStringOption(opt => opt.setName('id').setDescription('ID de la partida').setRequired(true))
     )
-    .addSubcommand(sub => sub.setName('fichas').setDescription('Ver tus fichas actuales')
+    .addSubcommand(sub => sub.setName('fichas').setDescription('Ver tus fichas actuales (privado)')
       .addStringOption(opt => opt.setName('id').setDescription('ID de la partida').setRequired(true))
     ),
 
@@ -40,18 +67,11 @@ const comando: SlashComando = {
         const gameId = await DominoGame.createGame(interaction.channel!.id, userId, interaction.user.username);
         await DominoGame.addPlayer(gameId, `bot-${Date.now()}`, '🤖 BOT', true);
         await DominoGame.startGame(gameId);
-
-        const game    = await DominoGame.getGame(gameId);
-        const players = await DominoGame.getPlayers(gameId);
         const current = await DominoGame.getCurrentPlayer(gameId);
-        const canPass = !(await DominoGame.canCurrentPlayerPlay(gameId));
-        const embed   = DominoDisplay.buildGameEmbed(game!, players, userId);
-        embed.setDescription('🁣 **Tú vs 🤖 BOT** — Usa los botones para jugar.');
-        const row = DominoDisplay.buildGameButtons(gameId, current?.user_id === userId, canPass);
-
+        const { embed, components, content } = await buildReply(gameId, userId);
         await interaction.editReply({
-          content: current?.is_bot ? `🤖 **BOT** empieza.` : `🎴 **¡La partida comenzó!** Es tu turno <@${userId}>`,
-          embeds: [embed], components: [row],
+          content: current?.is_bot ? `🤖 **BOT** empieza (tiene el doble más alto).` : content,
+          embeds: [embed], components,
         });
         return;
       }
@@ -83,20 +103,13 @@ const comando: SlashComando = {
         const game   = await DominoGame.getGame(gameId);
         if (!game) return interaction.reply({ content: '❌ Partida no encontrada.', ephemeral: true });
         if (game.creator_id !== userId) return interaction.reply({ content: '❌ Solo el creador puede iniciar.', ephemeral: true });
-
         await interaction.deferReply();
         await DominoGame.startGame(gameId);
-
-        const ug      = await DominoGame.getGame(gameId);
-        const up      = await DominoGame.getPlayers(gameId);
         const current = await DominoGame.getCurrentPlayer(gameId);
-        const canPass = !(await DominoGame.canCurrentPlayerPlay(gameId));
-        const embed   = DominoDisplay.buildGameEmbed(ug!, up, userId);
-        const row     = DominoDisplay.buildGameButtons(gameId, current?.user_id === userId, canPass);
-
+        const { embed, components, content } = await buildReply(gameId, userId);
         await interaction.editReply({
-          content: current?.is_bot ? `🤖 **BOT** empieza.` : `🎴 Turno de <@${current?.user_id}>`,
-          embeds: [embed], components: [row],
+          content: current?.is_bot ? `🤖 **BOT** empieza.` : content,
+          embeds: [embed], components,
         });
         return;
       }
@@ -105,21 +118,15 @@ const comando: SlashComando = {
         const gameId = interaction.options.getString('id', true);
         const ficha  = interaction.options.getInteger('ficha', true) - 1;
         const lado   = (interaction.options.getString('lado') ?? 'right') as 'left' | 'right';
-
         await interaction.deferReply();
         const { game: ug, winner } = await DominoGame.playTile(gameId, userId, ficha, lado);
         const up = await DominoGame.getPlayers(gameId);
-
         if (winner) {
           const embed = DominoDisplay.buildGameEmbed(ug, up, userId, `🏆 **¡${winner.is_bot ? winner.username : `<@${winner.user_id}>`} ganó!**`);
           return interaction.editReply({ embeds: [embed], components: [] });
         }
-
-        const next    = await DominoGame.getCurrentPlayer(gameId);
-        const canPass = !(await DominoGame.canCurrentPlayerPlay(gameId));
-        const embed   = DominoDisplay.buildGameEmbed(ug, up, userId);
-        const row     = DominoDisplay.buildGameButtons(gameId, next?.user_id === userId, canPass);
-        await interaction.editReply({ content: `🎴 Turno de <@${next?.user_id}>`, embeds: [embed], components: [row] });
+        const { embed, components, content } = await buildReply(gameId, userId);
+        await interaction.editReply({ content, embeds: [embed], components });
         return;
       }
 
@@ -129,19 +136,17 @@ const comando: SlashComando = {
         const { blocked } = await DominoGame.passTurn(gameId, userId);
         const ug = await DominoGame.getGame(gameId);
         const up = await DominoGame.getPlayers(gameId);
-
         if (blocked) {
           const { winner, scores } = await DominoGame.getWinnerByPoints(gameId);
-          const scoreText = scores.map(s => `${s.player.is_bot ? s.player.username : `<@${s.player.user_id}>`}: **${s.points}** pts`).join('\n');
-          const embed = DominoDisplay.buildGameEmbed(ug!, up, userId, `🔒 **¡Juego bloqueado!**\n🏆 Gana **${winner.is_bot ? winner.username : `<@${winner.user_id}>`}**\n\n${scoreText}`);
+          const scoreText = scores.map(s =>
+            `${s.player.is_bot ? s.player.username : `<@${s.player.user_id}>`}: **${s.points}** pts`
+          ).join('\n');
+          const embed = DominoDisplay.buildGameEmbed(ug!, up, userId,
+            `🔒 **¡Juego bloqueado!**\n🏆 Gana **${winner.is_bot ? winner.username : `<@${winner.user_id}>`}**\n\n${scoreText}`);
           return interaction.editReply({ embeds: [embed], components: [] });
         }
-
-        const next    = await DominoGame.getCurrentPlayer(gameId);
-        const canPass = !(await DominoGame.canCurrentPlayerPlay(gameId));
-        const embed   = DominoDisplay.buildGameEmbed(ug!, up, userId, `⏭️ <@${userId}> pasó su turno.`);
-        const row     = DominoDisplay.buildGameButtons(gameId, next?.user_id === userId, canPass);
-        await interaction.editReply({ content: `🎴 Turno de <@${next?.user_id}>`, embeds: [embed], components: [row] });
+        const { embed, components, content } = await buildReply(gameId, userId, `⏭️ <@${userId}> pasó su turno.`);
+        await interaction.editReply({ content, embeds: [embed], components });
         return;
       }
 
@@ -152,7 +157,12 @@ const comando: SlashComando = {
         if (!player) return interaction.reply({ content: '❌ No estás en esta partida.', ephemeral: true });
         const handText = DominoDisplay.formatHand(player.tiles, game?.left_end ?? -1, game?.right_end ?? -1);
         await interaction.reply({
-          content: `🃏 **Tus fichas (${player.tiles.length}):**\n${handText}\n\n✅ = jugable  ❌ = no jugable`,
+          embeds: [{
+            title: `🃏 Tus fichas (${player.tiles.length})`,
+            description: handText || '*Sin fichas*',
+            color: 0x2ecc71,
+            footer: { text: '✅ = jugable  ← → indica el lado válido  ↔ = ambos lados' },
+          }],
           ephemeral: true,
         });
         return;
