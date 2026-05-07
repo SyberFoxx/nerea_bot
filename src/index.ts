@@ -83,8 +83,9 @@ function getCommandsByCategory(): Record<string, Array<{ name: string; descripti
   return categories;
 }
 
-// Cargar comandos al iniciar
-const loadedCommands = loadCommands();
+// Cargar comandos al iniciar — solo desde src/comandos/
+const comandosDir = path.join(__dirname, 'comandos');
+const loadedCommands = loadCommands(comandosDir);
 console.log(`\n📊 Estadísticas de comandos:`);
 console.log(`✅ ${loadedCommands.length} comandos cargados`);
 console.log(`🔤 ${aliases.size} alias registrados\n`);
