@@ -5,8 +5,10 @@ import {
   ButtonStyle,
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
+  AttachmentBuilder,
 } from 'discord.js';
 import { DominoGame, DominoGameData, DominoPlayer, DominoTile, BoardTile } from './gameLogic';
+import { generateDominoBoard } from '../../canvas/dominoCanvas';
 
 // ─── Constantes visuales ──────────────────────────────────────────────────────
 const DOTS_EMOJI = ['0️⃣','1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣'];
@@ -51,6 +53,34 @@ export class DominoDisplay {
     }).join('\n');
   }
 
+  // ── Canvas del tablero ────────────────────────────────────────────────────
+
+  /**
+   * Genera la imagen canvas del tablero.
+   * Retorna el AttachmentBuilder listo para enviar con el embed.
+   */
+  static buildBoardImage(
+    game: DominoGameData,
+    players: DominoPlayer[],
+    viewerUserId?: string,
+    extraMessage?: string,
+  ): AttachmentBuilder {
+    const board       = DominoGame.parseBoard(game.board);
+    const viewer      = viewerUserId ? players.find(p => p.user_id === viewerUserId) : null;
+    const viewerTiles = (viewer && !viewer.is_bot) ? viewer.tiles : [];
+
+    const buf = generateDominoBoard({
+      game,
+      board,
+      players,
+      viewerTiles,
+      currentUserId: viewerUserId ?? '',
+      extraMessage,
+    });
+
+    return new AttachmentBuilder(buf, { name: 'domino_board.png' });
+  }
+
   // ── Embed principal ───────────────────────────────────────────────────────
 
   static buildGameEmbed(
@@ -59,7 +89,6 @@ export class DominoDisplay {
     viewerUserId?: string,
     extraMessage?: string
   ): EmbedBuilder {
-    const board    = DominoGame.parseBoard(game.board);
     const isActive = game.status === 'in_progress';
     const current  = isActive ? players[game.current_pos] : null;
 
@@ -72,9 +101,10 @@ export class DominoDisplay {
     const embed = new EmbedBuilder()
       .setColor(colorMap[game.status] ?? 0x95a5a6)
       .setTitle('🁣 Dominó')
+      .setImage('attachment://domino_board.png')
       .setTimestamp();
 
-    // Estado y turno en la misma línea
+    // Estado
     const statusText: Record<string, string> = {
       waiting:     '🟡 Esperando jugadores',
       in_progress: '🟢 En curso',
@@ -82,6 +112,7 @@ export class DominoDisplay {
     };
     embed.addFields({ name: 'Estado', value: statusText[game.status] ?? game.status, inline: true });
 
+    // Turno
     if (current) {
       embed.addFields({
         name: 'Turno',
@@ -90,7 +121,7 @@ export class DominoDisplay {
       });
     }
 
-    // Extremos del tablero
+    // Extremos
     if (game.left_end !== -1) {
       embed.addFields({
         name: 'Extremos',
@@ -99,23 +130,7 @@ export class DominoDisplay {
       });
     }
 
-    // Tablero
-    embed.addFields({
-      name: `🎴 Tablero — ${board.length} ficha${board.length !== 1 ? 's' : ''}`,
-      value: this.formatBoard(board, game.left_end, game.right_end),
-      inline: false,
-    });
-
-    // Jugadores con conteo de fichas
-    const playerList = players.map(p => {
-      const isCurrent = current?.user_id === p.user_id;
-      const name      = p.is_bot ? `🤖 ${p.username}` : `<@${p.user_id}>`;
-      const tileBar   = '▪'.repeat(Math.min(p.tiles.length, 7)) + (p.tiles.length > 7 ? `+${p.tiles.length - 7}` : '');
-      return `${isCurrent ? '▶️ ' : '　'}${name} — **${p.tiles.length}** \`${tileBar}\``;
-    }).join('\n');
-    embed.addFields({ name: '👥 Jugadores', value: playerList || 'Ninguno', inline: false });
-
-    // Fichas del viewer (solo si es su turno o lo pide)
+    // Fichas del viewer en texto (para referencia rápida)
     if (viewerUserId && isActive) {
       const viewer = players.find(p => p.user_id === viewerUserId);
       if (viewer && !viewer.is_bot) {

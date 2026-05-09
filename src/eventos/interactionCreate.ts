@@ -215,6 +215,7 @@ async function buildDominoReply(gameId: string, viewerUserId: string, extraMsg?:
     : [];
 
   const embed      = DominoDisplay.buildGameEmbed(game!, players, viewerUserId, extraMsg);
+  const attachment = DominoDisplay.buildBoardImage(game!, players, viewerUserId, extraMsg);
   const components = game!.status === 'finished'
     ? []
     : DominoDisplay.buildGameComponents(gameId, isMyTurn, canPass, playableTiles);
@@ -227,7 +228,7 @@ async function buildDominoReply(gameId: string, viewerUserId: string, extraMsg?:
         ? `🎴 **¡Es tu turno!** <@${viewerUserId}>`
         : `🎴 Turno de <@${current?.user_id}>`;
 
-  return { embed, components, content };
+  return { embed, attachment, components, content };
 }
 
 async function handleDomino(interaction: any): Promise<void> {
@@ -262,8 +263,9 @@ async function handleDomino(interaction: any): Promise<void> {
       const ug = await DominoGame.getGame(gameId);
       const up = await DominoGame.getPlayers(gameId);
       const embed = DominoDisplay.buildGameEmbed(ug!, up);
+      const att   = DominoDisplay.buildBoardImage(ug!, up);
       embed.setDescription(`✅ **${user.username}** se unió. (${up.length}/4 jugadores)`);
-      await interaction.update({ embeds: [embed], components: [DominoDisplay.buildWaitingButtons(gameId)] });
+      await interaction.update({ embeds: [embed], components: [DominoDisplay.buildWaitingButtons(gameId)], files: [att] });
       await interaction.followUp({ content: '✅ Te uniste a la partida.', ephemeral: true });
       return;
     }
@@ -278,8 +280,8 @@ async function handleDomino(interaction: any): Promise<void> {
       await interaction.deferUpdate();
       await DominoGame.startGame(gameId);
 
-      const { embed, components, content } = await buildDominoReply(gameId, user.id);
-      await interaction.editReply({ content, embeds: [embed], components });
+      const { embed, attachment, components, content } = await buildDominoReply(gameId, user.id);
+      await interaction.editReply({ content, embeds: [embed], files: [attachment], components });
 
       const current = await DominoGame.getCurrentPlayer(gameId);
       if (current?.is_bot) {
@@ -317,6 +319,9 @@ async function handleDomino(interaction: any): Promise<void> {
     // ── Selección de ficha (select menu) ──────────────────────────────────
     if (action === 'select' && parts[2] === 'tile') {
       if (!interaction.isStringSelectMenu()) return;
+
+      // gameId empieza en parts[3] (dom_select_tile_<gameId>)
+      const gameId = parts.slice(3).join('_');
 
       const game = await DominoGame.getGame(gameId);
       if (!game || game.status !== 'in_progress')
@@ -372,6 +377,9 @@ async function handleDomino(interaction: any): Promise<void> {
     // ── Selección de lado (segundo select menu) ───────────────────────────
     if (action === 'select' && parts[2] === 'side') {
       if (!interaction.isStringSelectMenu()) return;
+
+      // gameId empieza en parts[3] (dom_select_side_<gameId>)
+      const gameId = parts.slice(3).join('_');
 
       const game = await DominoGame.getGame(gameId);
       if (!game || game.status !== 'in_progress')
